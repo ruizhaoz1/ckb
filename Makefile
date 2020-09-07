@@ -1,9 +1,10 @@
 .DEFAULT_GOAL:=help
 SHELL = /bin/sh
 MOLC    := moleculec
-MOLC_VERSION := 0.4.2
+MOLC_VERSION := 0.6.0
 VERBOSE := $(if ${CI},--verbose,)
-CLIPPY_OPTS := -D warnings -D clippy::clone_on_ref_ptr -D clippy::enum_glob_use -D clippy::fallible_impl_from
+CLIPPY_OPTS := -D warnings -D clippy::clone_on_ref_ptr -D clippy::enum_glob_use -D clippy::fallible_impl_from \
+	-A clippy::mutable_key_type
 CKB_TEST_ARGS := -c 4
 INTEGRATION_RUST_LOG := ckb-network=error
 
@@ -34,20 +35,13 @@ submodule-init:
 
 .PHONY: integration
 integration: submodule-init setup-ckb-test ## Run integration tests in "test" dir.
-	cargo build
-	cd test && RUST_BACKTRACE=1 RUST_LOG=${INTEGRATION_RUST_LOG} cargo run -- --bin ../target/debug/ckb ${CKB_TEST_ARGS}
-
-.PHONY: integration-windows
-integration-windows: submodule-init
-	cp -f Cargo.lock test/Cargo.lock
-	cargo build
-	mv target test/
-	cd test && cargo run -- --bin target/debug/ckb ${CKB_TEST_ARGS}
+	cargo build --features deadlock_detection
+	RUST_BACKTRACE=1 RUST_LOG=${INTEGRATION_RUST_LOG} test/run.sh -- --bin ../target/debug/ckb ${CKB_TEST_ARGS}
 
 .PHONY: integration-release
 integration-release: submodule-init setup-ckb-test
-	cargo build --release
-	cd test && cargo run --release -- --bin ../target/release/ckb ${CKB_TEST_ARGS}
+	cargo build --release --features deadlock_detection
+	RUST_BACKTRACE=1 RUST_LOG=${INTEGRATION_RUST_LOG} test/run.sh --release -- --bin ../target/release/ckb ${CKB_TEST_ARGS}
 
 ##@ Document
 .PHONY: doc
@@ -65,7 +59,7 @@ gen-rpc-doc:  ## Generate rpc documentation
 
 .PHONY: gen-hashes
 gen-hashes: ## Generate docs/hashes.toml
-	cargo run cli hashes -b > docs/hashes.toml
+	cargo run list-hashes -b > docs/hashes.toml
 
 ##@ Building
 .PHONY: check
@@ -76,6 +70,14 @@ check: setup-ckb-test ## Runs all of the compiler's checks.
 .PHONY: build
 build: ## Build binary with release profile.
 	cargo build ${VERBOSE} --release
+
+.PHONY: build-for-profiling-without-debug-symbols
+build-for-profiling-without-debug-symbols: ## Build binary with for profiling without debug symbols.
+	JEMALLOC_SYS_WITH_MALLOC_CONF="prof:true" cargo build ${VERBOSE} --release --features "profiling"
+
+.PHONY: build-for-profiling
+build-for-profiling: ## Build binary with for profiling.
+	devtools/release/make-with-debug-symbols build-for-profiling-without-debug-symbols
 
 .PHONY: prod
 prod: ## Build binary for production release.
@@ -88,6 +90,10 @@ prod-docker:
 .PHONY: prod-test
 prod-test:
 	RUSTFLAGS="--cfg disable_faketime" RUSTDOCFLAGS="--cfg disable_faketime" cargo test ${VERBOSE} --all -- --nocapture
+
+.PHONY: prod-with-debug
+prod-with-debug:
+	devtools/release/make-with-debug-symbols prod
 
 .PHONY: docker
 docker: ## Build docker image
@@ -113,8 +119,14 @@ clippy: setup-ckb-test ## Run linter to examine Rust source codes.
 
 .PHONY: security-audit
 security-audit: ## Use cargo-audit to audit Cargo.lock for crates with security vulnerabilities.
-	@cargo +nightly install cargo-audit -Z install-upgrade
-	cargo audit
+	# https://rustsec.org/advisories/RUSTSEC-2019-0031: spin is no longer actively maintained, it's not a problem
+	# https://rustsec.org/advisories/RUSTSEC-2020-0016: net2 has been deprecated, but still a lot of required crates are dependent on it
+	# https://rustsec.org/advisories/RUSTSEC-2020-0036: failure is officially deprecated/unmaintained, but still a lot of required crates are dependent on it
+	cargo audit \
+		--ignore RUSTSEC-2019-0031 \
+		--ignore RUSTSEC-2020-0016 \
+		--ignore RUSTSEC-2020-0036 \
+		--deny-warnings
 	# expecting to see "Success No vulnerable packages found"
 
 .PHONY: bench-test
@@ -140,11 +152,15 @@ check-whitespaces:
 check-dirty-rpc-doc: gen-rpc-doc
 	git diff --exit-code rpc/README.md rpc/json/rpc.json
 
+.PHONY: check-dirty-hashes-toml
+check-dirty-hashes-toml: gen-hashes
+	git diff --exit-code docs/hashes.toml
+
 ##@ Generates Files
 .PHONY: gen
 GEN_MOL_IN_DIR := util/types/schemas
 GEN_MOL_OUT_DIR := util/types/src/generated
-GEN_MOL_FILES := ${GEN_MOL_OUT_DIR}/blockchain.rs ${GEN_MOL_OUT_DIR}/extensions.rs
+GEN_MOL_FILES := ${GEN_MOL_OUT_DIR}/blockchain.rs ${GEN_MOL_OUT_DIR}/extensions.rs ${GEN_MOL_OUT_DIR}/protocols.rs
 gen: check-moleculec-version ${GEN_MOL_FILES} # Generate Protocol Files
 
 .PHONY: check-moleculec-version
@@ -154,7 +170,10 @@ check-moleculec-version:
 ${GEN_MOL_OUT_DIR}/blockchain.rs: ${GEN_MOL_IN_DIR}/blockchain.mol
 	${MOLC} --language rust --schema-file $< | rustfmt > $@
 
-${GEN_MOL_OUT_DIR}/extensions.rs: ${GEN_MOL_IN_DIR}//extensions.mol
+${GEN_MOL_OUT_DIR}/extensions.rs: ${GEN_MOL_IN_DIR}/extensions.mol
+	${MOLC} --language rust --schema-file $< | rustfmt > $@
+
+${GEN_MOL_OUT_DIR}/protocols.rs: ${GEN_MOL_IN_DIR}/protocols.mol
 	${MOLC} --language rust --schema-file $< | rustfmt > $@
 
 ##@ Cleanup

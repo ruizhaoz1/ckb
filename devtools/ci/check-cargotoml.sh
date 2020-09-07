@@ -73,17 +73,17 @@ function search_crate() {
     local depcnt=0
     local grepopts="-rh"
     tmpcnt=$({\
-        ${GREP} ${grepopts} "\(^\| \)extern crate ${crate}\(::\|;\)" "${source}" \
+        ${GREP} ${grepopts} "\(^\| \)extern crate ${crate}\(::\|;\| as \)" "${source}" \
             || true; }\
         | wc -l)
     depcnt=$((depcnt + tmpcnt))
     tmpcnt=$({\
-        ${GREP} ${grepopts} "\(^\| \)use ${crate}\(::\|;\)" "${source}" \
+        ${GREP} ${grepopts} "\(^\| \)use ${crate}\(::\|;\| as \)" "${source}" \
             || true; }\
         | wc -l)
     depcnt=$((depcnt + tmpcnt))
     tmpcnt=$({\
-        ${GREP} ${grepopts} "[ (<]\(::\|\)${crate}::" "${source}" \
+        ${GREP} ${grepopts} "\(^\|[ (<]\)\(::\|\)${crate}::" "${source}" \
             || true; }\
         | wc -l)
     depcnt=$((depcnt + tmpcnt))
@@ -131,18 +131,7 @@ function check_dependencies_for() {
             fi
             if [ "${depcnt}" -eq 0 ]; then
                 case "${dependency}" in
-                    serde)
-                        tmpcnt=$({\
-                            ${GREP} -rh "serde_derive" "${cargo_toml}" \
-                                || true; }\
-                            | wc -l)
-                        if [ "${tmpcnt}" -eq 0 ]; then
-                            printf "Error: [%s::%s] in <%s>\n" \
-                                "${deptype}" "${dependency}" "${pkgroot}"
-                            ERRCNT=$((ERRCNT + 1))
-                        fi
-                        ;;
-                    generic_channel | phf)
+                    phf|quote)
                         # We cann't handle these crates.
                         printf "Warn: [%s::%s] in <%s>\n" \
                             "${deptype}" "${dependency}" "${pkgroot}"

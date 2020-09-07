@@ -1,44 +1,18 @@
 use std::fs;
 use std::io::{self, Read};
-use std::path::PathBuf;
 
 use crate::helper::prompt;
 use ckb_app_config::{ExitCode, InitArgs};
 use ckb_chain_spec::ChainSpec;
-use ckb_db::{db::RocksDB, DBConfig};
 use ckb_jsonrpc_types::ScriptHashType;
 use ckb_resource::{
-    Resource, TemplateContext, AVAILABLE_SPECS, CKB_CONFIG_FILE_NAME, DEFAULT_SPEC,
-    MINER_CONFIG_FILE_NAME, SPEC_DEV_FILE_NAME,
+    Resource, TemplateContext, AVAILABLE_SPECS, CKB_CONFIG_FILE_NAME, MINER_CONFIG_FILE_NAME,
+    SPEC_DEV_FILE_NAME,
 };
 use ckb_types::{prelude::*, H256};
 
 const DEFAULT_LOCK_SCRIPT_HASH_TYPE: &str = "type";
 const SECP256K1_BLAKE160_SIGHASH_ALL_ARG_LEN: usize = 20 * 2 + 2; // 42 = 20 x 2 + prefix 0x
-
-fn check_db_compatibility(path: PathBuf) {
-    if path.exists() {
-        let config = DBConfig {
-            path: path.clone(),
-            ..Default::default()
-        };
-        if let Some(err) = RocksDB::open_with_error(&config, 1).err() {
-            if err
-                .to_string()
-                .contains("the database version is not matched")
-            {
-                let input =
-                    prompt(format!("Database is not incompatible, remove {:?}? ", path).as_str());
-
-                if ["y", "Y"].contains(&input.trim()) {
-                    if let Some(e) = fs::remove_dir_all(path).err() {
-                        eprintln!("{}", e);
-                    }
-                }
-            }
-        }
-    }
-}
 
 pub fn init(args: InitArgs) -> Result<(), ExitCode> {
     let mut args = args;
@@ -52,10 +26,10 @@ pub fn init(args: InitArgs) -> Result<(), ExitCode> {
 
     let exported = Resource::exported_in(&args.root_dir);
     if !args.force && exported {
-        eprintln!("Config files already exists, use --force to overwrite.");
+        eprintln!("Config files already exist, use --force to overwrite.");
 
         if args.interactive {
-            let input = prompt("Overwrite config file now? ");
+            let input = prompt("Overwrite config files now? ");
 
             if !["y", "Y"].contains(&input.trim()) {
                 return Err(ExitCode::Failure);
@@ -66,13 +40,6 @@ pub fn init(args: InitArgs) -> Result<(), ExitCode> {
     }
 
     if args.interactive {
-        let data_dir = args.root_dir.join("data");
-        let db_path = data_dir.join("db");
-        let indexer_db_path = data_dir.join("indexer_db");
-
-        check_db_compatibility(db_path);
-        check_db_compatibility(indexer_db_path);
-
         let in_block_assembler_code_hash = prompt("code hash: ");
         let in_args = prompt("args: ");
         let in_hash_type = prompt("hash_type: ");
@@ -177,18 +144,22 @@ pub fn init(args: InitArgs) -> Result<(), ExitCode> {
         args.root_dir.display()
     );
 
-    let mut context = TemplateContext {
-        spec: &args.chain,
-        rpc_port: &args.rpc_port,
-        p2p_port: &args.p2p_port,
-        log_to_file: args.log_to_file,
-        log_to_stdout: args.log_to_stdout,
-        block_assembler: &block_assembler,
-        spec_source: "bundled",
-    };
+    let log_to_file = args.log_to_file.to_string();
+    let log_to_stdout = args.log_to_stdout.to_string();
+    let mut context = TemplateContext::new(
+        &args.chain,
+        vec![
+            ("rpc_port", args.rpc_port.as_str()),
+            ("p2p_port", args.p2p_port.as_str()),
+            ("log_to_file", log_to_file.as_str()),
+            ("log_to_stdout", log_to_stdout.as_str()),
+            ("block_assembler", block_assembler.as_str()),
+            ("spec_source", "bundled"),
+        ],
+    );
 
     if let Some(spec_file) = args.import_spec {
-        context.spec_source = "file";
+        context.insert("spec_source", "file");
 
         let specs_dir = args.root_dir.join("specs");
         fs::create_dir_all(&specs_dir)?;
@@ -211,7 +182,7 @@ pub fn init(args: InitArgs) -> Result<(), ExitCode> {
             println!("cp {} specs/{}.toml", spec_file, args.chain);
             fs::copy(spec_file, target_file)?;
         }
-    } else if args.chain == DEFAULT_SPEC {
+    } else if args.chain == "dev" {
         println!("create {}", SPEC_DEV_FILE_NAME);
         Resource::bundled(SPEC_DEV_FILE_NAME.to_string()).export(&context, &args.root_dir)?;
     }

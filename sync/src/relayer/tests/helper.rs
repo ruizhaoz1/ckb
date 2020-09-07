@@ -1,13 +1,14 @@
-use crate::{Relayer, SyncSharedState};
+use crate::{Relayer, SyncShared};
 use ckb_chain::{chain::ChainService, switch::Switch};
 use ckb_chain_spec::consensus::ConsensusBuilder;
+use ckb_fee_estimator::FeeRate;
 use ckb_network::{
-    Behaviour, CKBProtocolContext, Error, Peer, PeerIndex, ProtocolId, TargetSession,
+    bytes::Bytes as P2pBytes, Behaviour, CKBProtocolContext, Error, Peer, PeerIndex, ProtocolId,
+    TargetSession,
 };
 use ckb_shared::shared::{Shared, SharedBuilder};
 use ckb_store::ChainStore;
 use ckb_test_chain_utils::always_success_cell;
-use ckb_tx_pool::FeeRate;
 use ckb_types::prelude::*;
 use ckb_types::{
     bytes::Bytes,
@@ -23,9 +24,7 @@ use ckb_types::{
     U256,
 };
 use faketime::{self, unix_time_as_millis};
-use std::cell::RefCell;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{cell::RefCell, future::Future, pin::Pin, sync::Arc, time::Duration};
 
 pub(crate) fn new_index_transaction(index: usize) -> IndexTransaction {
     let transaction = TransactionBuilder::default()
@@ -51,7 +50,7 @@ pub(crate) fn new_header_builder(shared: &Shared, parent: &HeaderView) -> Header
         .next_epoch_ext(snapshot.consensus(), &parent_epoch, parent)
         .unwrap_or(parent_epoch);
     HeaderBuilder::default()
-        .parent_hash(parent_hash.to_owned())
+        .parent_hash(parent_hash)
         .number((parent.number() + 1).pack())
         .timestamp((parent.timestamp() + 1).pack())
         .epoch(epoch.number_with_fraction(parent.number() + 1).pack())
@@ -152,11 +151,11 @@ pub(crate) fn build_chain(tip: BlockNumber) -> (Relayer, OutPoint) {
             .expect("processing block should be ok");
     }
 
-    let sync_shared_state = Arc::new(SyncSharedState::new(shared));
+    let sync_shared = Arc::new(SyncShared::new(shared, Default::default()));
     (
         Relayer::new(
             chain_controller,
-            sync_shared_state,
+            sync_shared,
             FeeRate::zero(),
             std::u64::MAX,
         ),
@@ -166,33 +165,34 @@ pub(crate) fn build_chain(tip: BlockNumber) -> (Relayer, OutPoint) {
 
 #[derive(Default)]
 pub(crate) struct MockProtocalContext {
-    pub sent_messages: RefCell<Vec<(ProtocolId, PeerIndex, Bytes)>>,
-    pub sent_messages_to: RefCell<Vec<(PeerIndex, Bytes)>>,
+    pub sent_messages: RefCell<Vec<(ProtocolId, PeerIndex, P2pBytes)>>,
+    pub sent_messages_to: RefCell<Vec<(PeerIndex, P2pBytes)>>,
 }
 
 impl CKBProtocolContext for MockProtocalContext {
     fn set_notify(&self, _interval: Duration, _token: u64) -> Result<(), Error> {
         unimplemented!()
     }
+    fn remove_notify(&self, _token: u64) -> Result<(), Error> {
+        unimplemented!()
+    }
     fn quick_send_message(
         &self,
         _proto_id: ProtocolId,
         _peer_index: PeerIndex,
-        _data: Bytes,
+        _data: P2pBytes,
     ) -> Result<(), Error> {
         unimplemented!();
     }
-    fn quick_send_message_to(&self, _peer_index: PeerIndex, _data: Bytes) -> Result<(), Error> {
+    fn quick_send_message_to(&self, _peer_index: PeerIndex, _data: P2pBytes) -> Result<(), Error> {
         unimplemented!();
     }
-    fn quick_filter_broadcast(&self, _target: TargetSession, _data: Bytes) -> Result<(), Error> {
+    fn quick_filter_broadcast(&self, _target: TargetSession, _data: P2pBytes) -> Result<(), Error> {
         unimplemented!();
     }
     fn future_task(
         &self,
-        _task: Box<
-            (dyn futures::future::Future<Item = (), Error = ()> + std::marker::Send + 'static),
-        >,
+        _task: Pin<Box<dyn Future<Output = ()> + 'static + Send>>,
         _blocking: bool,
     ) -> Result<(), Error> {
         Ok(())
@@ -201,25 +201,28 @@ impl CKBProtocolContext for MockProtocalContext {
         &self,
         proto_id: ProtocolId,
         peer_index: PeerIndex,
-        data: Bytes,
+        data: P2pBytes,
     ) -> Result<(), Error> {
         self.sent_messages
             .borrow_mut()
             .push((proto_id, peer_index, data));
         Ok(())
     }
-    fn send_message_to(&self, peer_index: PeerIndex, data: Bytes) -> Result<(), Error> {
+    fn send_message_to(&self, peer_index: PeerIndex, data: P2pBytes) -> Result<(), Error> {
         self.sent_messages_to.borrow_mut().push((peer_index, data));
         Ok(())
     }
 
-    fn filter_broadcast(&self, _target: TargetSession, _data: Bytes) -> Result<(), Error> {
+    fn filter_broadcast(&self, _target: TargetSession, _data: P2pBytes) -> Result<(), Error> {
         unimplemented!();
     }
     fn disconnect(&self, _peer_index: PeerIndex, _message: &str) -> Result<(), Error> {
         unimplemented!();
     }
     fn get_peer(&self, _peer_index: PeerIndex) -> Option<Peer> {
+        unimplemented!();
+    }
+    fn with_peer_mut(&self, _peer_index: PeerIndex, _f: Box<dyn FnOnce(&mut Peer)>) {
         unimplemented!();
     }
     fn connected_peers(&self) -> Vec<PeerIndex> {

@@ -1,6 +1,7 @@
 use crate::utils::{build_relay_tx_hashes, build_relay_txs, sleep, wait_until};
 use crate::{Net, Spec, TestProtocol, DEFAULT_TX_PROPOSAL_WINDOW};
-use ckb_sync::{NetworkProtocol, RETRY_ASK_TX_TIMEOUT_INCREASE};
+use ckb_network::SupportProtocols;
+use ckb_sync::RETRY_ASK_TX_TIMEOUT_INCREASE;
 use ckb_types::{
     core::{Capacity, TransactionBuilder},
     packed::{CellInput, GetRelayTransactions, OutPoint, RelayMessage},
@@ -105,7 +106,7 @@ impl Spec for TransactionRelayMultiple {
         net.waiting_for_sync(node0.get_tip_block_number());
 
         info!("Send multiple transactions to node0");
-        let tx_hash = transaction.hash().to_owned();
+        let tx_hash = transaction.hash();
         transaction
             .outputs()
             .into_iter()
@@ -120,7 +121,7 @@ impl Spec for TransactionRelayMultiple {
                             .unwrap()
                             .to_entity(),
                     )
-                    .output(output.clone())
+                    .output(output)
                     .input(CellInput::new(OutPoint::new(tx_hash.clone(), i as u32), 0))
                     .output_data(Default::default())
                     .build();
@@ -163,7 +164,7 @@ impl Spec for TransactionRelayTimeout {
         let dummy_tx = TransactionBuilder::default().build();
         info!("Sending RelayTransactionHashes to node");
         net.send(
-            NetworkProtocol::RELAY.into(),
+            SupportProtocols::Relay.protocol_id(),
             pi,
             build_relay_tx_hashes(&[dummy_tx.hash()]),
         );
@@ -176,7 +177,7 @@ impl Spec for TransactionRelayTimeout {
         let wait_seconds = RETRY_ASK_TX_TIMEOUT_INCREASE.as_secs();
         info!("Waiting for {} seconds", wait_seconds);
         // Relay protocol will retry 30 seconds later when same GetRelayTransactions received from other peer
-        // (not happend in current test case)
+        // (not happened in current test case)
         sleep(wait_seconds);
         assert!(
             !wait_get_relay_txs(&net),
@@ -205,7 +206,7 @@ impl Spec for RelayInvalidTransaction {
         let dummy_tx = TransactionBuilder::default().build();
         info!("Sending RelayTransactionHashes to node");
         net.send(
-            NetworkProtocol::RELAY.into(),
+            SupportProtocols::Relay.protocol_id(),
             pi,
             build_relay_tx_hashes(&[dummy_tx.hash()]),
         );
@@ -221,7 +222,7 @@ impl Spec for RelayInvalidTransaction {
         );
         info!("Sending RelayTransactions to node");
         net.send(
-            NetworkProtocol::RELAY.into(),
+            SupportProtocols::Relay.protocol_id(),
             pi,
             build_relay_txs(&[(dummy_tx, 333)]),
         );
@@ -246,4 +247,37 @@ fn wait_get_relay_txs(net: &Net) -> bool {
         }
         false
     })
+}
+
+pub struct TransactionRelayEmptyPeers;
+
+impl Spec for TransactionRelayEmptyPeers {
+    crate::name!("transaction_relay_empty_peers");
+
+    crate::setup!(num_nodes: 2);
+
+    fn run(&self, net: &mut Net) {
+        net.exit_ibd_mode();
+
+        let node0 = &net.nodes[0];
+        let node1 = &net.nodes[1];
+
+        node0.generate_blocks((DEFAULT_TX_PROPOSAL_WINDOW.1 + 2) as usize);
+        node0.waiting_for_sync(node1, DEFAULT_TX_PROPOSAL_WINDOW.1 + 3);
+        info!("Disconnect node1 and generate new transaction on node0");
+        node0.disconnect(&node1);
+        let hash = node0.generate_transaction();
+
+        info!("Transaction should be relayed to node1 when node0's peers become none-empty");
+        node0.connect(node1);
+        let rpc_client = node1.rpc_client();
+        let ret = wait_until(10, || {
+            if let Some(transaction) = rpc_client.get_transaction(hash.clone()) {
+                transaction.tx_status.block_hash.is_none()
+            } else {
+                false
+            }
+        });
+        assert!(ret, "Transaction should be relayed to node1");
+    }
 }

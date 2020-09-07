@@ -27,7 +27,7 @@ impl SendLargeCyclesTxInBlock {
         let mut generator = Generator::new();
         let privkey = generator.gen_privkey();
         let pubkey_data = privkey.pubkey().expect("Get pubkey failed").serialize();
-        let lock_arg = Bytes::from(&blake2b_256(&pubkey_data)[0..20]);
+        let lock_arg = Bytes::from(blake2b_256(&pubkey_data)[0..20].to_vec());
         SendLargeCyclesTxInBlock { privkey, lock_arg }
     }
 }
@@ -79,7 +79,7 @@ impl Spec for SendLargeCyclesTxInBlock {
         assert!(result, "block can't relay to node1");
     }
 
-    fn modify_ckb_config(&self) -> Box<dyn Fn(&mut CKBAppConfig) -> ()> {
+    fn modify_ckb_config(&self) -> Box<dyn Fn(&mut CKBAppConfig)> {
         let lock_arg = self.lock_arg.clone();
         Box::new(move |config| {
             config.network.connect_outbound_interval_secs = 0;
@@ -102,7 +102,7 @@ impl SendLargeCyclesTxToRelay {
         let mut generator = Generator::new();
         let privkey = generator.gen_privkey();
         let pubkey_data = privkey.pubkey().expect("Get pubkey failed").serialize();
-        let lock_arg = Bytes::from(&blake2b_256(&pubkey_data)[0..20]);
+        let lock_arg = Bytes::from(blake2b_256(&pubkey_data)[0..20].to_vec());
         SendLargeCyclesTxToRelay { privkey, lock_arg }
     }
 }
@@ -147,7 +147,7 @@ impl Spec for SendLargeCyclesTxToRelay {
         assert!(!result, "Node1 should ignore tx");
     }
 
-    fn modify_ckb_config(&self) -> Box<dyn Fn(&mut CKBAppConfig) -> ()> {
+    fn modify_ckb_config(&self) -> Box<dyn Fn(&mut CKBAppConfig)> {
         let lock_arg = self.lock_arg.clone();
         Box::new(move |config| {
             config.network.connect_outbound_interval_secs = 0;
@@ -160,7 +160,7 @@ impl Spec for SendLargeCyclesTxToRelay {
 }
 
 fn build_tx(node: &Node, privkey: &Privkey, lock_arg: Bytes) -> TransactionView {
-    let secp_out_point = OutPoint::new(node.dep_group_tx_hash().clone(), 0);
+    let secp_out_point = OutPoint::new(node.dep_group_tx_hash(), 0);
     let lock = Script::new_builder()
         .args(lock_arg.pack())
         .code_hash(type_lock_script_code_hash().pack())
@@ -177,12 +177,12 @@ fn build_tx(node: &Node, privkey: &Privkey, lock_arg: Bytes) -> TransactionView 
     };
     let output1 = CellOutput::new_builder()
         .capacity(capacity_bytes!(100).pack())
-        .lock(lock.clone())
+        .lock(lock)
         .build();
     let tx = TransactionBuilder::default()
-        .cell_dep(cell_dep.clone())
-        .input(input1.clone())
-        .output(output1.clone())
+        .cell_dep(cell_dep)
+        .input(input1)
+        .output(output1)
         .output_data(Default::default())
         .build();
     let tx_hash: H256 = tx.hash().unpack();

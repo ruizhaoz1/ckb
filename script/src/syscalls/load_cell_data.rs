@@ -5,8 +5,8 @@ use crate::{
         LOAD_CELL_DATA_AS_CODE_SYSCALL_NUMBER, LOAD_CELL_DATA_SYSCALL_NUMBER, SLICE_OUT_OF_BOUND,
         SUCCESS,
     },
-    DataLoader,
 };
+use ckb_traits::CellDataProvider;
 use ckb_types::core::cell::CellMeta;
 use ckb_vm::{
     memory::{Memory, FLAG_EXECUTABLE, FLAG_FREEZED},
@@ -23,7 +23,7 @@ pub struct LoadCellData<'a, DL> {
     group_outputs: &'a [usize],
 }
 
-impl<'a, DL: DataLoader + 'a> LoadCellData<'a, DL> {
+impl<'a, DL: CellDataProvider + 'a> LoadCellData<'a, DL> {
     pub fn new(
         data_loader: &'a DL,
         outputs: &'a [CellMeta],
@@ -103,12 +103,13 @@ impl<'a, DL: DataLoader + 'a> LoadCellData<'a, DL> {
             .data_loader
             .load_cell_data(cell)
             .ok_or(VMError::Unexpected)?
-            .0;
+            .0
+            .slice((content_offset as usize)..(content_end as usize));
         machine.memory_mut().init_pages(
             addr,
             memory_size,
             FLAG_EXECUTABLE | FLAG_FREEZED,
-            Some(data.slice(content_offset as usize, content_end as usize)),
+            Some(data),
             0,
         )?;
 
@@ -140,7 +141,7 @@ impl<'a, DL: DataLoader + 'a> LoadCellData<'a, DL> {
     }
 }
 
-impl<'a, Mac: SupportMachine, DL: DataLoader> Syscalls<Mac> for LoadCellData<'a, DL> {
+impl<'a, Mac: SupportMachine, DL: CellDataProvider> Syscalls<Mac> for LoadCellData<'a, DL> {
     fn initialize(&mut self, _machine: &mut Mac) -> Result<(), VMError> {
         Ok(())
     }

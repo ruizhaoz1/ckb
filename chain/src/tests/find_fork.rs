@@ -3,11 +3,12 @@ use crate::{
     chain::{ChainService, ForkChanges},
     switch::Switch,
 };
-use ckb_chain_spec::consensus::Consensus;
+use ckb_chain_spec::consensus::{Consensus, ProposalWindow};
 use ckb_shared::shared::SharedBuilder;
 use ckb_store::ChainStore;
 use ckb_types::{
     core::{BlockBuilder, BlockExt, BlockView},
+    packed,
     prelude::Pack,
     U256,
 };
@@ -30,10 +31,10 @@ fn test_find_fork_case1() {
         .get_block_header(&shared.store().get_block_hash(0).unwrap())
         .unwrap();
 
-    let parent = genesis.clone();
+    let parent = genesis;
     let mock_store = MockStore::new(&parent, shared.store());
     let mut fork1 = MockChain::new(parent.clone(), shared.consensus());
-    let mut fork2 = MockChain::new(parent.clone(), shared.consensus());
+    let mut fork2 = MockChain::new(parent, shared.consensus());
     for _ in 0..4 {
         fork1.gen_empty_block_with_diff(100u64, &mock_store);
     }
@@ -103,13 +104,13 @@ fn test_find_fork_case2() {
         .get_block_header(&shared.store().get_block_hash(0).unwrap())
         .unwrap();
     let mock_store = MockStore::new(&genesis, shared.store());
-    let mut fork1 = MockChain::new(genesis.clone(), shared.consensus());
+    let mut fork1 = MockChain::new(genesis, shared.consensus());
 
     for _ in 0..4 {
         fork1.gen_empty_block_with_diff(100u64, &mock_store);
     }
 
-    let mut fork2 = MockChain::new(fork1.blocks()[0].header().to_owned(), shared.consensus());
+    let mut fork2 = MockChain::new(fork1.blocks()[0].header(), shared.consensus());
     for _ in 0..2 {
         fork2.gen_empty_block_with_diff(90u64, &mock_store);
     }
@@ -177,7 +178,7 @@ fn test_find_fork_case3() {
 
     let mock_store = MockStore::new(&genesis, shared.store());
     let mut fork1 = MockChain::new(genesis.clone(), shared.consensus());
-    let mut fork2 = MockChain::new(genesis.clone(), shared.consensus());
+    let mut fork2 = MockChain::new(genesis, shared.consensus());
 
     for _ in 0..3 {
         fork1.gen_empty_block_with_diff(80u64, &mock_store)
@@ -249,7 +250,7 @@ fn test_find_fork_case4() {
 
     let mock_store = MockStore::new(&genesis, shared.store());
     let mut fork1 = MockChain::new(genesis.clone(), shared.consensus());
-    let mut fork2 = MockChain::new(genesis.clone(), shared.consensus());
+    let mut fork2 = MockChain::new(genesis, shared.consensus());
 
     for _ in 0..5 {
         fork1.gen_empty_block_with_diff(40u64, &mock_store);
@@ -318,7 +319,7 @@ fn repeatedly_switch_fork() {
         .unwrap();
     let mock_store = MockStore::new(&genesis, shared.store());
     let mut fork1 = MockChain::new(genesis.clone(), shared.consensus());
-    let mut fork2 = MockChain::new(genesis.clone(), shared.consensus());
+    let mut fork2 = MockChain::new(genesis, shared.consensus());
 
     let (shared, table) = SharedBuilder::default()
         .consensus(Consensus::default())
@@ -350,7 +351,7 @@ fn repeatedly_switch_fork() {
     let uncle = fork2.blocks().last().cloned().unwrap().as_uncle();
     let parent = fork1.blocks().last().cloned().unwrap();
     let new_block1 = BlockBuilder::default()
-        .parent_hash(parent.hash().to_owned())
+        .parent_hash(parent.hash())
         .number((parent.number() + 1).pack())
         .compact_target(parent.compact_target().pack())
         .nonce(1u128.pack())
@@ -363,7 +364,7 @@ fn repeatedly_switch_fork() {
     //switch fork2
     let mut parent = fork2.blocks().last().cloned().unwrap();
     let new_block2 = BlockBuilder::default()
-        .parent_hash(parent.hash().to_owned())
+        .parent_hash(parent.hash())
         .number((parent.number() + 1).pack())
         .compact_target(parent.compact_target().pack())
         .nonce(2u128.pack())
@@ -373,7 +374,7 @@ fn repeatedly_switch_fork() {
         .process_block(Arc::new(new_block2), Switch::DISABLE_ALL)
         .unwrap();
     let new_block3 = BlockBuilder::default()
-        .parent_hash(parent.hash().to_owned())
+        .parent_hash(parent.hash())
         .number((parent.number() + 1).pack())
         .compact_target(parent.compact_target().pack())
         .nonce(2u128.pack())
@@ -383,9 +384,9 @@ fn repeatedly_switch_fork() {
         .unwrap();
 
     //switch fork1
-    parent = new_block1.clone();
+    parent = new_block1;
     let new_block4 = BlockBuilder::default()
-        .parent_hash(parent.hash().to_owned())
+        .parent_hash(parent.hash())
         .number((parent.number() + 1).pack())
         .compact_target(parent.compact_target().pack())
         .nonce(1u128.pack())
@@ -394,9 +395,9 @@ fn repeatedly_switch_fork() {
         .process_block(Arc::new(new_block4.clone()), Switch::DISABLE_ALL)
         .unwrap();
 
-    parent = new_block4.clone();
+    parent = new_block4;
     let new_block5 = BlockBuilder::default()
-        .parent_hash(parent.hash().to_owned())
+        .parent_hash(parent.hash())
         .number((parent.number() + 1).pack())
         .compact_target(parent.compact_target().pack())
         .nonce(1u128.pack())
@@ -404,4 +405,82 @@ fn repeatedly_switch_fork() {
     chain_service
         .process_block(Arc::new(new_block5), Switch::DISABLE_ALL)
         .unwrap();
+}
+
+// [ 1 <- 2 <- 3 ] <- 4 <- 5 <- 6 <- 7 <- 8 <- 9 <- 10 <- 11
+//              \
+//               \
+//                - 4' <- 5'
+
+#[test]
+fn test_fork_proposal_table() {
+    let builder = SharedBuilder::default();
+    let mut consensus = Consensus::default();
+    consensus.tx_proposal_window = ProposalWindow(2, 3);
+
+    let (shared, table) = builder.consensus(consensus).build().unwrap();
+    let mut chain_service = ChainService::new(shared.clone(), table);
+
+    let genesis = shared
+        .store()
+        .get_block_header(&shared.store().get_block_hash(0).unwrap())
+        .unwrap();
+
+    let mock_store = MockStore::new(&genesis, shared.store());
+    let mut mock = MockChain::new(genesis, shared.consensus());
+
+    for i in 1..12 {
+        let ids = vec![packed::ProposalShortId::new([
+            0u8, 0, 0, 0, 0, 0, 0, 0, 0, i,
+        ])];
+        mock.gen_block_with_proposal_ids(40u64, ids, &mock_store);
+    }
+
+    for blk in mock.blocks() {
+        chain_service
+            .process_block(Arc::new(blk.clone()), Switch::DISABLE_ALL)
+            .unwrap();
+    }
+
+    for _ in 1..9 {
+        mock.rollback(&mock_store);
+    }
+
+    for i in 4..6 {
+        let ids = vec![packed::ProposalShortId::new([
+            1u8, 0, 0, 0, 0, 0, 0, 0, 0, i,
+        ])];
+        mock.gen_block_with_proposal_ids(200u64, ids, &mock_store);
+    }
+
+    for blk in mock.blocks().iter().skip(3) {
+        chain_service
+            .process_block(Arc::new(blk.clone()), Switch::DISABLE_ALL)
+            .unwrap();
+    }
+
+    // snapshot proposals is prepare for tx-pool, validate on tip + 1
+    let snapshot = shared.snapshot();
+    let proposals = snapshot.proposals();
+
+    assert_eq!(
+        &HashSet::from_iter(
+            vec![
+                packed::ProposalShortId::new([0u8, 0, 0, 0, 0, 0, 0, 0, 0, 3]),
+                packed::ProposalShortId::new([1u8, 0, 0, 0, 0, 0, 0, 0, 0, 4])
+            ]
+            .into_iter()
+        ),
+        proposals.set()
+    );
+
+    assert_eq!(
+        &HashSet::from_iter(
+            vec![packed::ProposalShortId::new([
+                1u8, 0, 0, 0, 0, 0, 0, 0, 0, 5
+            ])]
+            .into_iter()
+        ),
+        proposals.gap()
+    );
 }

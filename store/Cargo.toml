@@ -1,17 +1,16 @@
 [package]
 name = "ckb-store"
-version = "0.25.2-pre"
+version = "0.36.0-pre"
 authors = ["Nervos Core Dev <dev@nervos.org>"]
 edition = "2018"
 license = "MIT"
 
 [dependencies]
-serde = "1.0"
-serde_derive = "1.0"
 ckb-types = { path = "../util/types" }
 ckb-db = { path = "../db" }
 ckb-chain-spec = { path = "../spec" }
 lru-cache = { git = "https://github.com/nervosnetwork/lru-cache", rev = "a35fdb8" }
-ckb-script-data-loader = { path = "../script/data-loader" }
+ckb-traits = { path = "../traits" }
 ckb-util = { path = "../util" }
 ckb-error = { path = "../error" }
+ckb-app-config = { path = "../util/app-config" }

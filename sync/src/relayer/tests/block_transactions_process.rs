@@ -1,7 +1,8 @@
-use crate::relayer::block_transactions_process::{BlockTransactionsProcess, Status};
-use crate::relayer::error::{Error, Misbehavior};
+use crate::relayer::block_transactions_process::BlockTransactionsProcess;
 use crate::relayer::tests::helper::{build_chain, MockProtocalContext};
+use crate::{Status, StatusCode};
 use ckb_network::PeerIndex;
+use ckb_store::ChainStore;
 use ckb_tx_pool::{PlugTarget, TxEntry};
 use ckb_types::prelude::*;
 use ckb_types::{
@@ -45,8 +46,8 @@ fn test_accept_block() {
         .build();
 
     let block = BlockBuilder::default()
-        .transactions(vec![tx1.clone(), tx2.clone()])
-        .uncle(uncle.clone().as_uncle())
+        .transactions(vec![tx1, tx2.clone()])
+        .uncle(uncle.as_uncle())
         .build();
     let prefilled = HashSet::from_iter(vec![0usize].into_iter());
 
@@ -70,7 +71,7 @@ fn test_accept_block() {
     let block_transactions: BlockTransactions = packed::BlockTransactions::new_builder()
         .block_hash(block.header().hash())
         .transactions(vec![tx2.data()].pack())
-        .uncles(vec![uncle.clone().as_uncle().data()].pack())
+        .uncles(vec![uncle.as_uncle().data()].pack())
         .build();
 
     let mock_protocal_context = MockProtocalContext::default();
@@ -83,12 +84,10 @@ fn test_accept_block() {
         peer_index,
     );
 
-    let r = process.execute();
+    assert_eq!(process.execute(), Status::ok());
 
     let pending_compact_blocks = relayer.shared.state().pending_compact_blocks();
-
     assert!(pending_compact_blocks.get(&hash).is_none());
-    assert_eq!(r.ok(), Some(Status::Accept));
 
     assert!(relayer
         .shared
@@ -113,7 +112,7 @@ fn test_unknown_request() {
         .build();
 
     let block = BlockBuilder::default()
-        .transactions(vec![tx1.clone(), tx2.clone()])
+        .transactions(vec![tx1, tx2.clone()])
         .build();
 
     let prefilled = HashSet::from_iter(vec![0usize].into_iter());
@@ -146,9 +145,7 @@ fn test_unknown_request() {
         Arc::<MockProtocalContext>::clone(&nc),
         peer_index,
     );
-
-    let r = process.execute();
-    assert_eq!(r.ok(), Some(Status::UnkownRequest));
+    assert_eq!(process.execute(), Status::ignored());
 }
 
 #[test]
@@ -199,7 +196,7 @@ fn test_invalid_transaction_root() {
     }
 
     let block_transactions: BlockTransactions = packed::BlockTransactions::new_builder()
-        .block_hash(block_hash.clone())
+        .block_hash(block_hash)
         .transactions(vec![tx2.data()].pack())
         .build();
 
@@ -212,11 +209,9 @@ fn test_invalid_transaction_root() {
         Arc::<MockProtocalContext>::clone(&nc),
         peer_index,
     );
-
-    let r = process.execute();
     assert_eq!(
-        r.unwrap_err().downcast::<Error>().unwrap(),
-        Error::Misbehavior(Misbehavior::InvalidTransactionRoot)
+        process.execute(),
+        StatusCode::CompactBlockHasUnmatchedTransactionRootWithReconstructedBlock.into(),
     );
 }
 
@@ -224,8 +219,12 @@ fn test_invalid_transaction_root() {
 fn test_collision_and_send_missing_indexes() {
     let (relayer, _) = build_chain(5);
 
-    let snapshot = relayer.shared.snapshot();
-    let last_block = snapshot.get_block(&snapshot.tip_hash()).unwrap();
+    let active_chain = relayer.shared.active_chain();
+    let last_block = relayer
+        .shared
+        .store()
+        .get_block(&active_chain.tip_hash())
+        .unwrap();
     let last_cellbase = last_block.transactions().first().cloned().unwrap();
 
     let peer_index: PeerIndex = 100.into();
@@ -251,7 +250,6 @@ fn test_collision_and_send_missing_indexes() {
 
     let fake_hash = tx3
         .hash()
-        .clone()
         .as_builder()
         .nth31(0u8.into())
         .nth30(0u8.into())
@@ -265,7 +263,7 @@ fn test_collision_and_send_missing_indexes() {
     assert_ne!(tx3.hash(), fake_tx.hash());
 
     let block = BlockBuilder::default()
-        .transactions(vec![tx1.clone(), tx2.clone(), fake_tx])
+        .transactions(vec![tx1, tx2.clone(), fake_tx])
         .build_unchecked();
 
     let prefilled = HashSet::from_iter(vec![0usize].into_iter());
@@ -306,16 +304,17 @@ fn test_collision_and_send_missing_indexes() {
         Arc::<MockProtocalContext>::clone(&nc),
         peer_index,
     );
-
-    let r = process.execute();
-    assert_eq!(r.ok(), Some(Status::CollisionAndSendMissingIndexes));
+    assert_eq!(
+        process.execute(),
+        StatusCode::CompactBlockMeetsShortIdsCollision.into()
+    );
 
     let content = packed::GetBlockTransactions::new_builder()
         .block_hash(block.header().hash())
         .indexes(vec![1u32, 2u32].pack())
         .build();
     let message = packed::RelayMessage::new_builder().set(content).build();
-    let data = message.as_slice().into();
+    let data = message.as_bytes();
 
     // send missing indexes messages
     assert!(nc
@@ -352,12 +351,9 @@ fn test_collision_and_send_missing_indexes() {
         Arc::<MockProtocalContext>::clone(&nc),
         peer_index,
     );
-
-    let r = process.execute();
-
     assert_eq!(
-        r.unwrap_err().downcast::<Error>().unwrap(),
-        Error::Misbehavior(Misbehavior::InvalidTransactionRoot)
+        process.execute(),
+        StatusCode::CompactBlockHasUnmatchedTransactionRootWithReconstructedBlock.into(),
     );
 }
 
@@ -385,7 +381,7 @@ fn test_missing() {
         .build();
 
     let block = BlockBuilder::default()
-        .transactions(vec![tx1.clone(), tx2.clone(), tx3.clone()])
+        .transactions(vec![tx1, tx2.clone(), tx3])
         .build();
 
     let prefilled = HashSet::from_iter(vec![0usize].into_iter());
@@ -419,21 +415,21 @@ fn test_missing() {
         Arc::<MockProtocalContext>::clone(&nc),
         peer_index,
     );
-
-    let r = process.execute();
-    assert_eq!(r.ok(), Some(Status::Missing));
+    assert_eq!(
+        process.execute(),
+        StatusCode::CompactBlockRequiresFreshTransactions.into()
+    );
 
     let content = packed::GetBlockTransactions::new_builder()
         .block_hash(block.header().hash())
         .indexes(vec![2u32].pack())
         .build();
     let message = packed::RelayMessage::new_builder().set(content).build();
-    let data = message.as_slice().into();
 
     // send missing indexes messages
     assert!(nc
         .as_ref()
         .sent_messages_to
         .borrow()
-        .contains(&(peer_index, data)));
+        .contains(&(peer_index, message.as_bytes())));
 }

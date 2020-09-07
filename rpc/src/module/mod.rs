@@ -1,19 +1,23 @@
 mod alert;
 mod chain;
+mod debug;
 mod experiment;
 mod indexer;
 mod miner;
 mod net;
 mod pool;
 mod stats;
+mod subscription;
 mod test;
 
 pub(crate) use self::alert::{AlertRpc, AlertRpcImpl};
 pub(crate) use self::chain::{ChainRpc, ChainRpcImpl};
+pub(crate) use self::debug::{DebugRpc, DebugRpcImpl};
 pub(crate) use self::experiment::{ExperimentRpc, ExperimentRpcImpl};
 pub(crate) use self::indexer::{IndexerRpc, IndexerRpcImpl};
 pub(crate) use self::miner::{MinerRpc, MinerRpcImpl};
 pub(crate) use self::net::{NetworkRpc, NetworkRpcImpl};
 pub(crate) use self::pool::{PoolRpc, PoolRpcImpl};
 pub(crate) use self::stats::{StatsRpc, StatsRpcImpl};
+pub(crate) use self::subscription::{SubscriptionRpc, SubscriptionRpcImpl, SubscriptionSession};
 pub(crate) use self::test::{IntegrationTestRpc, IntegrationTestRpcImpl};

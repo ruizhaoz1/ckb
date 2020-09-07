@@ -6,12 +6,13 @@
 //! A cli to generate alert message,
 //! A config option to set alert messages to broard cast.
 //
-use crate::config::{NotifierConfig, SignatureConfig};
 use crate::notifier::Notifier;
 use crate::verifier::Verifier;
 use crate::BAD_MESSAGE_BAN_TIME;
+use ckb_app_config::NetworkAlertConfig;
 use ckb_logger::{debug, info, trace};
-use ckb_network::{CKBProtocolContext, CKBProtocolHandler, PeerIndex, TargetSession};
+use ckb_network::{bytes::Bytes, CKBProtocolContext, CKBProtocolHandler, PeerIndex, TargetSession};
+use ckb_notify::NotifyController;
 use ckb_types::{packed, prelude::*};
 use ckb_util::Mutex;
 use lru_cache::LruCache;
@@ -32,11 +33,11 @@ pub struct AlertRelayer {
 impl AlertRelayer {
     pub fn new(
         client_version: String,
-        notifier_config: NotifierConfig,
-        signature_config: SignatureConfig,
+        notify_controller: NotifyController,
+        signature_config: NetworkAlertConfig,
     ) -> Self {
         AlertRelayer {
-            notifier: Arc::new(Mutex::new(Notifier::new(client_version, notifier_config))),
+            notifier: Arc::new(Mutex::new(Notifier::new(client_version, notify_controller))),
             verifier: Arc::new(Verifier::new(signature_config)),
             known_lists: LruCache::new(KNOWN_LIST_SIZE),
         }
@@ -82,7 +83,7 @@ impl CKBProtocolHandler for AlertRelayer {
         for alert in self.notifier.lock().received_alerts() {
             let alert_id: u32 = alert.as_reader().raw().id().unpack();
             trace!("send alert {} to peer {}", alert_id, peer_index);
-            if let Err(err) = nc.quick_send_message_to(peer_index, alert.as_slice().into()) {
+            if let Err(err) = nc.quick_send_message_to(peer_index, alert.as_bytes()) {
                 debug!("alert_relayer send alert when connected error: {:?}", err);
             }
         }
@@ -92,9 +93,9 @@ impl CKBProtocolHandler for AlertRelayer {
         &mut self,
         nc: Arc<dyn CKBProtocolContext + Sync>,
         peer_index: PeerIndex,
-        data: bytes::Bytes,
+        data: Bytes,
     ) {
-        let alert: Arc<packed::Alert> = match packed::AlertReader::from_slice(&data) {
+        let alert: packed::Alert = match packed::AlertReader::from_slice(&data) {
             Ok(alert) => {
                 if alert.raw().message().is_utf8()
                     && alert
@@ -110,7 +111,7 @@ impl CKBProtocolHandler for AlertRelayer {
                         .map(|x| x.is_utf8())
                         .unwrap_or(true)
                 {
-                    Arc::new(alert.to_entity())
+                    alert.to_entity()
                 } else {
                     info!(
                         "Peer {} sends us malformed message: not utf-8 string",
@@ -165,6 +166,6 @@ impl CKBProtocolHandler for AlertRelayer {
             debug!("alert broadcast error: {:?}", err);
         }
         // add to received alerts
-        self.notifier.lock().add(alert);
+        self.notifier.lock().add(&alert);
     }
 }

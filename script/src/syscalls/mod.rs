@@ -175,21 +175,20 @@ impl Source {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::DataLoader;
     use byteorder::{ByteOrder, LittleEndian, WriteBytesExt};
     use ckb_db::RocksDB;
     use ckb_hash::blake2b_256;
     use ckb_store::{data_loader_wrapper::DataLoaderWrapper, ChainDB, COLUMNS};
+    use ckb_traits::{CellDataProvider, HeaderProvider};
     use ckb_types::{
         bytes::Bytes,
         core::{
-            cell::CellMeta, BlockExt, Capacity, EpochExt, HeaderBuilder, HeaderView,
+            cell::CellMeta, Capacity, EpochNumberWithFraction, HeaderBuilder, HeaderView,
             ScriptHashType, TransactionBuilder,
         },
         packed::{Byte32, CellOutput, OutPoint, Script, ScriptBuilder},
         prelude::*,
-        utilities::DIFF_TWO,
-        H256, U256,
+        H256,
     };
     use ckb_vm::machine::DefaultCoreMachine;
     use ckb_vm::{
@@ -234,7 +233,7 @@ mod tests {
             .store64(&size_addr, &(data.len() as u64))
             .is_ok());
 
-        let output_cell_data = Bytes::from(data);
+        let output_cell_data = Bytes::from(data.to_owned());
         let output = build_cell_meta(100, output_cell_data);
         let input_cell_data: Bytes = data.iter().rev().cloned().collect();
         let input_cell = build_cell_meta(100, input_cell_data);
@@ -275,7 +274,7 @@ mod tests {
         machine.set_register(A4, u64::from(Source::Transaction(SourceEntry::Input))); //source: 1 input
         machine.set_register(A7, LOAD_CELL_SYSCALL_NUMBER); // syscall number
 
-        let output_cell_data = Bytes::from(data);
+        let output_cell_data = Bytes::from(data.to_owned());
         let output = build_cell_meta(100, output_cell_data);
         let input_cell_data: Bytes = data.iter().rev().cloned().collect();
         let input_cell = build_cell_meta(100, input_cell_data);
@@ -364,7 +363,7 @@ mod tests {
         machine.set_register(A4, u64::from(Source::Transaction(SourceEntry::Input))); //source: 1 input
         machine.set_register(A7, LOAD_CELL_SYSCALL_NUMBER); // syscall number
 
-        let output_cell_data = Bytes::from(data);
+        let output_cell_data = Bytes::from(data.to_owned());
         let output = build_cell_meta(100, output_cell_data);
         let input_cell_data: Bytes = data.iter().rev().cloned().collect();
         let input_cell = build_cell_meta(100, input_cell_data);
@@ -414,7 +413,7 @@ mod tests {
         machine.set_register(A4, u64::from(Source::Transaction(SourceEntry::Input))); // source: 1 input
         machine.set_register(A7, LOAD_CELL_SYSCALL_NUMBER); // syscall number
 
-        let output_cell_data = Bytes::from(data);
+        let output_cell_data = Bytes::from(data.to_owned());
         let output = build_cell_meta(100, output_cell_data);
 
         let input_cell_data: Bytes = data.iter().rev().cloned().collect();
@@ -483,7 +482,7 @@ mod tests {
             mem_cell_data: Some((data, data_hash)),
         };
         let outputs = vec![];
-        let resolved_inputs = vec![input_cell.clone()];
+        let resolved_inputs = vec![input_cell];
         let resolved_cell_deps = vec![];
         let group_inputs = vec![];
         let group_outputs = vec![];
@@ -560,21 +559,17 @@ mod tests {
 
     struct MockDataLoader {
         headers: HashMap<Byte32, HeaderView>,
-        epochs: HashMap<Byte32, EpochExt>,
     }
 
-    impl DataLoader for MockDataLoader {
-        fn load_cell_data(&self, _cell: &CellMeta) -> Option<(Bytes, Byte32)> {
+    impl CellDataProvider for MockDataLoader {
+        fn get_cell_data(&self, _out_point: &OutPoint) -> Option<(Bytes, Byte32)> {
             None
         }
-        fn get_block_ext(&self, _block_hash: &Byte32) -> Option<BlockExt> {
-            None
-        }
+    }
+
+    impl HeaderProvider for MockDataLoader {
         fn get_header(&self, block_hash: &Byte32) -> Option<HeaderView> {
             self.headers.get(block_hash).cloned()
-        }
-        fn get_block_epoch(&self, block_hash: &Byte32) -> Option<EpochExt> {
-            self.epochs.get(block_hash).cloned()
         }
     }
 
@@ -599,12 +594,9 @@ mod tests {
         let header_correct_data = header_correct_bytes.as_slice();
 
         let mut headers = HashMap::default();
-        headers.insert(header.hash().clone(), header.clone());
-        let data_loader = MockDataLoader {
-            headers,
-            epochs: HashMap::default(),
-        };
-        let header_deps = vec![header.hash().clone()];
+        headers.insert(header.hash(), header.clone());
+        let data_loader = MockDataLoader { headers };
+        let header_deps = vec![header.hash()];
         let resolved_inputs = vec![];
         let resolved_cell_deps = vec![];
         let group_inputs = vec![];
@@ -655,33 +647,23 @@ mod tests {
         machine.set_register(A2, 0); // offset
         machine.set_register(A3, 0); //index
         machine.set_register(A4, u64::from(Source::Transaction(SourceEntry::HeaderDep))); //source: 4 header
+        machine.set_register(A5, HeaderField::EpochNumber as u64);
         machine.set_register(A7, LOAD_HEADER_BY_FIELD_SYSCALL_NUMBER); // syscall number
 
         let data_hash: H256 = blake2b_256(&data).into();
         let header = HeaderBuilder::default()
             .transactions_root(data_hash.pack())
-            .build();
-
-        let epoch = EpochExt::new_builder()
-            .number(u64::from(data[0]))
-            .base_block_reward(Capacity::bytes(100).unwrap())
-            .remainder_reward(Capacity::bytes(100).unwrap())
-            .previous_epoch_hash_rate(U256::one())
-            .last_block_hash_in_previous_epoch(Byte32::default())
-            .start_number(1234)
-            .length(1000)
-            .compact_target(DIFF_TWO)
+            .number(2000.pack())
+            .epoch(EpochNumberWithFraction::new(1, 40, 1000).pack())
             .build();
 
         let mut correct_data = [0u8; 8];
-        LittleEndian::write_u64(&mut correct_data, epoch.number());
+        LittleEndian::write_u64(&mut correct_data, 1);
 
         let mut headers = HashMap::default();
-        headers.insert(header.hash().clone(), header.clone());
-        let mut epochs = HashMap::default();
-        epochs.insert(header.hash().clone(), epoch.clone());
-        let data_loader = MockDataLoader { headers, epochs };
-        let header_deps = vec![header.hash().clone()];
+        headers.insert(header.hash(), header.clone());
+        let data_loader = MockDataLoader { headers };
+        let header_deps = vec![header.hash()];
         let resolved_inputs = vec![];
         let resolved_cell_deps = vec![];
         let group_inputs = vec![];
@@ -706,12 +688,6 @@ mod tests {
             Ok(correct_data.len() as u64)
         );
 
-        for (i, addr) in (addr..addr + correct_data.len() as u64).enumerate() {
-            prop_assert_eq!(
-                machine.memory_mut().load8(&addr),
-                Ok(u64::from(correct_data[i]))
-            );
-        }
         Ok(())
     }
 
@@ -821,7 +797,7 @@ mod tests {
         machine.set_register(A7, LOAD_SCRIPT_HASH_SYSCALL_NUMBER); // syscall number
 
         let script = Script::new_builder()
-            .args(Bytes::from(data).pack())
+            .args(Bytes::from(data.to_owned()).pack())
             .hash_type(ScriptHashType::Data.into())
             .build();
         let hash = script.calc_script_hash();
@@ -876,7 +852,7 @@ mod tests {
         machine.set_register(A7, LOAD_CELL_BY_FIELD_SYSCALL_NUMBER); // syscall number
 
         let script = Script::new_builder()
-            .args(Bytes::from(data).pack())
+            .args(Bytes::from(data.to_owned()).pack())
             .hash_type(ScriptHashType::Data.into())
             .build();
         let h = script.calc_script_hash();
@@ -891,7 +867,7 @@ mod tests {
             .build();
         input_cell.cell_output = output_with_lock;
         let outputs = vec![];
-        let resolved_inputs = vec![input_cell.clone()];
+        let resolved_inputs = vec![input_cell];
         let resolved_cell_deps = vec![];
         let group_inputs = vec![];
         let group_outputs = vec![];
@@ -938,11 +914,11 @@ mod tests {
         machine.set_register(A4, u64::from(Source::Transaction(source))); //source
         machine.set_register(A7, LOAD_WITNESS_SYSCALL_NUMBER); // syscall number
 
-        let witness = Bytes::from(data).pack();
+        let witness = Bytes::from(data.to_owned()).pack();
 
         let witness_correct_data = witness.raw_data();
 
-        let witnesses = vec![witness.clone()];
+        let witnesses = vec![witness];
         let group_inputs = vec![];
         let group_outputs = vec![];
         let mut load_witness = LoadWitness::new(witnesses.pack(), &group_inputs, &group_outputs);
@@ -993,12 +969,12 @@ mod tests {
         machine.set_register(A4, u64::from(Source::Group(source))); //source
         machine.set_register(A7, LOAD_WITNESS_SYSCALL_NUMBER); // syscall number
 
-        let witness = Bytes::from(data).pack();
+        let witness = Bytes::from(data.to_owned()).pack();
 
         let witness_correct_data = witness.raw_data();
 
         let dummy_witness = Bytes::default().pack();
-        let witnesses = vec![dummy_witness, witness.clone()];
+        let witnesses = vec![dummy_witness, witness];
         let group_inputs = vec![1];
         let group_outputs = vec![1];
         let mut load_witness = LoadWitness::new(witnesses.pack(), &group_inputs, &group_outputs);
@@ -1047,7 +1023,7 @@ mod tests {
         machine.set_register(A7, LOAD_SCRIPT_SYSCALL_NUMBER); // syscall number
 
         let script = ScriptBuilder::default()
-            .args(Bytes::from(data).pack())
+            .args(Bytes::from(data.to_owned()).pack())
             .build();
         let script_correct_data = script.as_slice();
 
@@ -1095,7 +1071,7 @@ mod tests {
         machine.set_register(A5, u64::from(Source::Transaction(SourceEntry::CellDep))); //source
         machine.set_register(A7, LOAD_CELL_DATA_AS_CODE_SYSCALL_NUMBER); // syscall number
 
-        let dep_cell_data = Bytes::from(data);
+        let dep_cell_data = Bytes::from(data.to_owned());
         let dep_cell = build_cell_meta(10000, dep_cell_data);
 
         let store = new_store();
@@ -1152,7 +1128,7 @@ mod tests {
 
         prop_assert!(machine.memory_mut().store64(&size_addr, &addr_size).is_ok());
 
-        let dep_cell_data = Bytes::from(data);
+        let dep_cell_data = Bytes::from(data.to_owned());
         let dep_cell = build_cell_meta(10000, dep_cell_data);
 
         let store = new_store();
@@ -1273,7 +1249,7 @@ mod tests {
         };
         machine.set_register(A7, syscall); // syscall number
 
-        let dep_cell_data = Bytes::from(data);
+        let dep_cell_data = Bytes::from(data.to_owned());
         let dep_cell = build_cell_meta(10000, dep_cell_data);
 
         let store = new_store();
@@ -1329,7 +1305,7 @@ mod tests {
         machine.set_register(A4, 0); //index
         machine.set_register(A5, u64::from(Source::Transaction(SourceEntry::CellDep))); //source
         machine.set_register(A7, LOAD_CELL_DATA_AS_CODE_SYSCALL_NUMBER); // syscall number
-        let dep_cell_data = Bytes::from(&data[..]);
+        let dep_cell_data = Bytes::from(data.to_vec());
         let dep_cell = build_cell_meta(10000, dep_cell_data);
 
         let store = new_store();
@@ -1372,7 +1348,7 @@ mod tests {
         machine.set_register(A5, u64::from(Source::Transaction(SourceEntry::CellDep))); //source
         machine.set_register(A7, LOAD_CELL_DATA_AS_CODE_SYSCALL_NUMBER); // syscall number
 
-        let dep_cell_data = Bytes::from(&data[..]);
+        let dep_cell_data = Bytes::from(data.to_vec());
         let dep_cell = build_cell_meta(10000, dep_cell_data);
 
         let store = new_store();
@@ -1418,7 +1394,7 @@ mod tests {
         machine.set_register(A5, u64::from(Source::Transaction(SourceEntry::CellDep))); //source
         machine.set_register(A7, LOAD_CELL_DATA_AS_CODE_SYSCALL_NUMBER); // syscall number
 
-        let dep_cell_data = Bytes::from(&data[..]);
+        let dep_cell_data = Bytes::from(data);
         let dep_cell = build_cell_meta(10000, dep_cell_data);
 
         let store = new_store();

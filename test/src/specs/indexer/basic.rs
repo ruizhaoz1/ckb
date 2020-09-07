@@ -57,16 +57,16 @@ impl Spec for IndexerBasic {
         });
 
         info!("Generate 3 more blocks on node0 to commit 6 txs");
-        let tx_pool_info = node0.rpc_client().tx_pool_info();
+        let tx_pool_info = node0.get_tip_tx_pool_info();
         assert_eq!(6, tx_pool_info.pending.value() as u64);
         node0.generate_blocks(1);
 
-        let tx_pool_info = node0.rpc_client().tx_pool_info();
+        let tx_pool_info = node0.get_tip_tx_pool_info();
         // in gap
         assert_eq!(6, tx_pool_info.pending.value() as u64);
         node0.generate_blocks(1);
 
-        let tx_pool_info = node0.rpc_client().tx_pool_info();
+        let tx_pool_info = node0.get_tip_tx_pool_info();
         assert_eq!(6, tx_pool_info.proposed.value() as u64);
         node0.generate_blocks(1);
 
@@ -116,7 +116,7 @@ impl Spec for IndexerBasic {
         assert_eq!(0, cell_transactions.len());
 
         info!("The block number and hash of index status should be same as tip when gives a higher index from");
-        let index_state = rpc_client.index_lock_hash(lock_hash.clone(), Some(100));
+        let index_state = rpc_client.index_lock_hash(lock_hash, Some(100));
         let tip_header = rpc_client.get_tip_header();
         assert_eq!(index_state.block_number, tip_header.inner.number);
         assert_eq!(index_state.block_hash, tip_header.hash);

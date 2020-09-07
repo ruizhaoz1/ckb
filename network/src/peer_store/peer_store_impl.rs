@@ -56,9 +56,9 @@ impl PeerStore {
         let score = self.score_config.default_score;
         if session_type.is_outbound() {
             self.addr_manager.add(AddrInfo::new(
-                peer_id.to_owned(),
+                peer_id,
                 addr.extract_ip_addr()?,
-                addr,
+                addr.exclude_p2p(),
                 now_ms,
                 score,
             ));
@@ -159,15 +159,17 @@ impl PeerStore {
         let now_ms = faketime::unix_time_as_millis();
         let addr_expired_ms = now_ms - ADDR_TIMEOUT_MS;
         let ban_list = self.ban_list.borrow();
+        let peers = self.peers.borrow();
         // get success connected addrs.
         self.addr_manager
             .fetch_random(count, |peer_addr: &AddrInfo| {
                 !ban_list.is_addr_banned(&peer_addr.addr)
-                    && peer_addr.had_connected(addr_expired_ms)
+                    && (peers.contains_key(&peer_addr.peer_id)
+                        || peer_addr.had_connected(addr_expired_ms))
             })
     }
 
-    /// Ban a addr
+    /// Ban an addr
     pub(crate) fn ban_addr(
         &mut self,
         addr: &Multiaddr,

@@ -1,3 +1,480 @@
+# [v0.35.0](https://github.com/nervosnetwork/ckb/compare/v0.34.2...v0.35.0) (2020-08-24)
+
+### Features
+
+* #2038 **rpc:** Re-organize RPC errors (@doitian)
+
+    This is a breaking change: b:rpc
+
+    This PR reworks on the RPC errors:
+
+    * Use JSONRPC error code to differentiate different errors. Also prefix the error code in the message to be search engine friendly.
+    * Make error message simple and easy to understand. The dump of the error is added as the data instead.
+    * Avoid reusing the same error message for different reasons.
+
+    **Breaking Changes**
+
+    * The error object `data` field is always absent before, now it can be a string which contains the detailed error information.
+    * The `code` in error object is always -3 for all the CKB internal errors, now it can have different values to differentiate different errors. Check the file `rpc/src/error.rs`.
+    * The error messages have been updated to improve readability.
+
+* #2049 **rpc:** Improve error messages from send transaction RPC (@doitian)
+
+* #2178 **rpc:** Add `generate_block` RPC to IntegrationTest module (@quake)
+
+    It allows user to generate block through RPC, it's a convenient feature for dApp integration test (like `truncate` RPC)
+
+* #2188 **rpc:** Add sync state RPC (@driftluo)
+
+    Wallet can fetch the best known block header the node gets from the P2P network.
+
+* #2184 **rpc:** `tx_pool_info` include tip hash (@keroro520)
+
+* #2144 **rpc:** Add `set_network_active` RPC (@quake)
+
+    Allows user to pause and restart p2p network message processing through RPC.
+
+* #2190 **rpc:** Move `add_node` / `remove_node` RPC to `Net` module (@quake)
+* #2196 **rpc:** Add more fields to RPC `get_peers` (@quake)
+
+    Added `connected_duration`, `last_ping_duration`, `protocols` and `sync_state` to `get_peers` RPC.
+
+* #2195 **rpc:** Add more fields to `local_node_info` RPC (@quake)
+
+    Added `active`, `connections` and `protocols` fields to `local_node_info`.
+
+* #2159: Load db options from a file; support configuring column families (@yangby-cryptape)
+* #2175: Support multiple file loggers in `ckb.toml` (@yangby-cryptape)
+* #2182: Take full control of main logger filter via RPC (@yangby-cryptape)
+
+### Bug Fixes
+
+* #2158: Panic if db options is empty (@yangby-cryptape)
+* #2157: The option of db path doesn't work (@yangby-cryptape)
+* #2177: Fix the lenient logger filter parser (@yangby-cryptape)
+* #2134: Update proposal table after chain reorg (@zhangsoledad)
+
+    Previously, proposal-table update not considered in chain rollback, it's almost impossible to happen in hashrate-based chain. But can be triggered by `truncate` RPC.
+
+* #2197: Should exit with error code when setup failed (@yangby-cryptape)
+
+    Issue: if the config was malformed and an error was thrown in `setup_app`, the process wouldn't exit.
+
+### Improvements
+
+* #2152: Change storage molecule table to struct (@quake)
+
+    This is a breaking change: b:database
+
+    Storage structs `HeaderView`, `EpochExt` and `TransactionInfo` are fixed size, we should use molecule `struct` instead of `table`, it reduces storage size and improves the performance a little bit.
+
+* #2150: Don't query store twice in method chaining (@yangby-cryptape)
+* #2151: Reduce times of querying header map (@yangby-cryptape)
+* #2147: Don't cache all data of header map in memory during IBD (@yangby-cryptape)
+* #2154: Split chain iter (@zhangsoledad)
+* #2153: Decoupling migration from db (@zhangsoledad)
+
+    Previously, migration coupling with DB, this sacrifice flexibility. In a case like this, opening a read-only DB will be trouble.
+    This PR proposal split migration.
+
+* #2163: Add HeaderProvider trait and split DataLoader to smaller trait (@quake)
+* #1988: Use a new method to detect headers sync timeout (@yangby-cryptape)
+
+    To avoid possible performance issues on headers synchronization.
+
+* #2180: Add case description and some assertion for `alert_propagation` integration test (@chuijiaolianying)
+* #2179: Refactor about integration service mining relate cases. (@chuijiaolianying)
+* #2189: Add case description and update case assertions for consensus related cases. (@chuijiaolianying)
+* #2204: Add some trait for integration cases (@chuijiaolianying)
+* #2164: Improve script error (@doitian)
+* #2168: Improve error when submitting block (@doitian)
+* #2169: Small tx-pool refactoring (@zhangsoledad)
+
+    * rename ContextualTransactionVerifier -> TimeRelativeTransactionVerifier
+    * split NonContextualTransactionVerifier from TransactionVerifier
+    * check syntactic correctness first before
+    * refactory tx-pool rejection error
+    * re-broadcast when duplicated tx submit
+
+# [v0.34.2](https://github.com/nervosnetwork/ckb/compare/v0.34.0...v0.34.2) (2020-08-08)
+
+### Bug Fixes
+
+* GHSA-q73f-w3h7-7wcc: Syscall to get data hash has inconsistent behaviors. (@zhangsoledad)
+* GHSA-wjxc-pjx9-4wvm: Upgrade snappy to 1.0. (@quake)
+* GHSA-3gjh-29fv-8hr6: Limit the decompressed size of p2p message. (@quake)
+
+# [v0.34.0](https://github.com/nervosnetwork/ckb/compare/v0.33.1...v0.34.0) (2020-07-17)
+
+### Features
+
+* #2067: Optimize scheduler (@driftluo)
+
+    Problems with the current scheduler:
+    1. The calculation is too frequent
+    2. Inability to adapt to complex network environments.
+
+    This PR implements an adaptive scheduler based on past data, removing most of the redundant calculations.
+
+* #2145: Don't cache all block status in memory (@yangby-cryptape)
+
+    When a node is start from number 0, it will sync all headers at first, then the `block_status_map` will be full quickly.
+    Then, along with the block sync, all data in `block_status_map` will be removed.
+    When the IBD is done, there will be nothing left in `block_status_map`.
+
+    But when another new-started node try to sync data from this node, this node will fetch all block statuses from database and insert them into `block_status_map` without deletions. And full block status will store in memory until the node is shutdown.
+
+* #2113: Change logger filter dynamically via RPC (@yangby-cryptape)
+* #2036: Monitor rocksdb memory usages in logs (optional; default: disable) (@yangby-cryptape)
+* #2114: Add command to generate peer id (@driftluo)
+
+    ```
+    $ ckb peer-id gen --secret_path ./a.txt
+    $ ckb peer-id from-secret --secret-path ./a.txt
+    ```
+
+* #2045: New subcommand replay (@zhangsoledad)
+
+    The new subcommand can be used in both profiling and sanity check, such as verifiying the downloaded data directory archive.
+
+* #2042: Return filename of `jemalloc_profiling_dump` (@keroro520)
+* #2064: Add RPC truncate (@keroro520)
+
+    For convenient to reproduce a specified environment when test, this PR adds RPC `truncate(target_tip_hash)` to roll-back the blockchain downto the target block.
+
+* #2081: Update `last_common_header` only in `find_blocks_to_fetch` (@keroro520)
+
+    `peer.best_known_block` refers to the best-known block we know this peer has announced; `peer.last_common_header` refers to the last block we both stored between local and peer. This PR proposes a new process to update the two fields.
+
+* #2136: Add RPC `clear_tx_pool` to remove all the transactions in the tx-pool (@keroro520)
+
+### Bug Fixes
+
+* #2101: Resolve an unexpected shutdown issue when we got a `ProtoHandleBlock` error in p2p (@quake)
+* #2124: `prepare_uncles_test` failed on `block_template` update delayed (@zhangsoledad)
+* #2140: Shrink state map (@zhangsoledad)
+
+    Cause rust hash table capacity does not shrink automatically, we need explicit call `shrink` for predictable limit memory usage.
+* #2109: Fix deadlock caused by conflicting lock order (@BurtonQin)
+
+### Improvements
+
+* #2126: Remove fee estimator (@zhangsoledad)
+
+    This `estimate_fee_rate` RPC is experimental, due to availability and performance issues, we decide to remove it.
+
+* #2128: Try next listen address on parsing error (@doitian)
+* #2107: Use generic key / value in template context (@quake)
+
+    This PR changed `TemplateContext` key/value from fixed field to hashmap, it made the `ckb-resource` crate easier to use in 3rd party applications
+
+* #2103: Use generic type in NetworkService (@quake)
+
+    This PR changed `NetworkService`'s exit_condvar to generic type and removed node_version from `start` fn, make it easier to use `ckb-network` crate as a lib
+
+* #2096: Move network protocol related variables to SupportProtocols (@quake)
+
+    To eliminate dependence of `ckb-sync` crate,  this PR refactored network protocol related variables and move them to a new enum: `SupportProtocols`
+
+# [v0.33.1](https://github.com/nervosnetwork/ckb/compare/v0.33.0...v0.33.1) (2020-07-02)
+
+### Bug Fixes
+
+* [GHSA-r9rv-9mh8-pxf4](https://github.com/nervosnetwork/ckb/security/advisories/GHSA-r9rv-9mh8-pxf4): BlockTimeTooNew should not be considered as invalid block (@zhangsoledad)
+
+# [v0.33.0](https://github.com/nervosnetwork/ckb/compare/v0.33.0...v0.32.2) (2020-06-19)
+
+### Bug Fixes
+
+* #2052: Return connected address in RPC `get_peers` (@keroro520)
+
+    The RPC `get_peers` miss the peer connected address. Hence it may be empty addresses returned for inbound peers.
+
+### Improvements
+
+* #2043: Upgrade tokio for tx-pool (@zhangsoledad)
+
+    * bump tokio 0.2
+    * refactor tx-pool with async/await
+
+* #2100: Move all `Config` structs to ckb-app-config (@quake)
+
+    To eliminate large dependences of `ckb-app-config`, this PR moved all config related structs to this crate and reversed dependencies of other crates
+
+* #2091: Logger filter parse crate name leniently (@yangby-cryptape)
+
+# [v0.32.2](https://github.com/nervosnetwork/ckb/compare/v0.32.1...v0.32.2) (2020-06-15)
+
+* [GHSA-pr39-8257-fxc2](https://github.com/nervosnetwork/ckb/security/advisories/GHSA-pr39-8257-fxc2): Avoid crash when parsing network address (@driftluo)
+* #2109: Fix deadlock caused by conflicting lock order (@BurtonQin)
+
+# [v0.32.1](https://github.com/nervosnetwork/ckb/compare/v0.32.0...v0.32.1) (2020-05-29)
+
+### Bug Fixes
+
+* [GHSA-84x2-2qv6-qg56](https://github.com/nervosnetwork/ckb/security/advisories/GHSA-84x2-2qv6-qg56): Add rate limit to avoid p2p DoS attacks (@quake)
+
+# [v0.32.0](https://github.com/nervosnetwork/ckb/compare/v0.31.1...v0.32.0) (2020-05-22)
+
+### Features
+
+* #2002: Avoid explosion of disordering blocks based on BLOCK_DOWNLOAD_WINDOW (@keroro520)
+* #2018: Prof command support specify execution path (@zhangsoledad)
+* #1999: Optimize block download tasks with a simple task scheduler (@driftluo)
+* #2069: Reset testnet aggron to v4 (@doitian)
+* #2084: Expose methods so we can use CKB as a library (@xxuejie)
+
+### Bug Fixes
+
+* nervosnetwork/tentacle#218: Fix FutureTask signals memory leak (@TheWaWaR)
+* #2039: Use wrong function to get a slice to decode ping messages (@yangby-cryptape)
+* #2035: Remove unsupport configurations in Cargo.toml (@yangby-cryptape)
+* #2054: Fix a typo of a thread name (@yangby-cryptape)
+* #2074: Orphan block pool deadlock (@quake)
+* #2075: Fix collaboration issues between two protocol (@driftluo)
+* #2063: Should use an empty peer store when failed to load data from file (@quake)
+
+### Improvements
+
+* #1968: Simplify network protocols (@TheWaWaR)
+* #2006: Cache system cell for resolve deps (@zhangsoledad)
+
+# [v0.31.1](https://github.com/nervosnetwork/ckb/compare/v0.31.0...v0.31.1) (2020-04-23)
+
+### Bug Fixes
+
+* [GHSA-q669-2vfg-cxcg](https://github.com/nervosnetwork/ckb/security/advisories/GHSA-q669-2vfg-cxcg): Fix undefined behavior that dereference an unaligned pointer. (@yangby-cryptape)
+
+# [v0.31.0](https://github.com/nervosnetwork/ckb/compare/v0.30.2...v0.31.0) (2020-04-02)
+
+### Sync Improvements
+
+* #1947: Repair using of snapshot (@zhangsoledad)
+* #1959: Improve get_ancestor efficiency (@keroro520)
+* #1957: Concurrent download blocks on ibd (@driftluo)
+* #1966: Enhanced locator (@driftluo)
+* #1961: Fix bug on last common marked (@driftluo)
+* #1985: Speed up fetch collect (@driftluo)
+* #1979: Fix build_skip performance bug (@TheWaWaR)
+
+### Features
+
+* #1954: Add detect-asm feature to script (@xxuejie)
+* #1955: Bump CKB VM to fix a performance regression (@xxuejie)
+* #1948: Use module disable error instead of method not found (@driftluo)
+* #1956: Replace rocksdb wrapper (@zhangsoledad)
+* #1946: Use same allocator for all (@yangby-cryptape)
+* #1940: Add a feature to enable jemalloc profiling (@yangby-cryptape)
+* #1881: Remove memory cellset (@zhangsoledad)
+* #1923: Network upgrade to async (@driftluo)
+* #1978: Built-in miner should support https RPC URL (@quake)
+* #1958: Log more sync and relay metrics (@keroro520)
+* #1992: Add an option to control how many blocks the miner has to mine (@yangby-cryptape)
+
+    ```bash
+    ckb miner -C . --limit 10 # Exit after 10 nonces found
+    ckb miner -C . -l 5       # Exit after 5 nonces found
+    ckb miner -C .            # Run forever
+    ckb miner -C . --limit 0  # Run forever, too
+    ```
+
+* #1993: Add metrics filter (@keroro520)
+
+    Filter metrics via `log_enabled!` inside `metric!`.
+
+### Bug Fixes
+
+* #1977: Fix false positive in IllTransactionChecker (@xxuejie)
+* #1996: Wait for RPC server to cleanup on shutdown (@zhangsoledad)
+* #1997: Orphan_block_pool should record block origin (@zhangsoledad)
+
+# [v0.30.2](https://github.com/nervosnetwork/ckb/compare/v0.30.1...v0.30.2) (2020-04-02)
+
+### Bug Fixes
+
+* #1989: Fix `build_skip` performance bug (@TheWaWaR)
+
+# [v0.30.1](https://github.com/nervosnetwork/ckb/compare/v0.30.0...v0.30.1) (2020-03-23)
+
+Reset Aggron the testnet genesis hash to
+0x63547ecf6fc22d1325980c524b268b4a044d49cda3efbd584c0a8c8b9faaf9e1
+
+# [v0.30.0](https://github.com/nervosnetwork/ckb/compare/v0.29.0...v0.30.0) (2020-03-20)
+
+### Breaking Changes
+
+* #1939: Add new response field `min_fee_rate` in RPC `tx_pool_info` (@driftluo)
+
+    BREAKING CHANGE: RPC interface
+
+### Features
+
+* #1848: Add a new json rpc method `get_block_economic_state` (@yangby-cryptape)
+
+    Replace the JSON-RPC method [`get_cellbase_output_capacity_details`].
+
+* #1915: Reject new scripts with known bugs (@xxuejie)
+
+    For compatibility reasons, there're certain bugs that we have to leave
+    to the next hardfork to fix. However those bugs, especially VM bugs
+    might lead to surprising unexpected behaviors. This change adds a new
+    checker that checks against newly created cells for scripts with bugs,
+    and reject those transaction when we can. This way we can alert users
+    about the bugs as early as we can.
+
+### Improvements
+
+* #1856: Define StatusCode to indicate the result of sync operation (@keroro520)
+
+    Learned from HTTP Response, use `StatusCode` to indicate the result of sync-operation, try to replace original `Result<T, future::Error>`.
+
+* #1941: Uses feature flags to enable deadlock detection (@zhangsoledad)
+
+    we should disable deadlock detection by default.
+    use the `deadlock_detection` feature flag enable  deadlock detection.
+
+* #1931: Collect metrics by logger (@keroro520)
+
+### Bug Fixes
+
+* #1916: Transaction should be relayed when node connects peers (@quake)
+* #1921: Estimate_fee RPC error msg (@jjyr)
+* #1922: `CKBProtocolContext#connected_peers` should filter peers by protocol id (@quake)
+* #1950: Fix incorrect error messages for JSON uints (@yangby-cryptape)
+
+# [v0.29.0](https://github.com/nervosnetwork/ckb/compare/v0.28.0...v0.29.0) (2020-02-26)
+
+### Breaking Changes
+
+* #1928: Null outputs_validator means passthrough. (@doitian)
+
+    The default behavior is incompatible with v0.28.0, but is compatible with v0.27.1 and older versions.
+
+# [v0.28.0](https://github.com/nervosnetwork/ckb/compare/v0.27.0...v0.28.0) (2020-01-31)
+
+### Breaking Changes
+
+* #1879: add `outputs_validator` to `send_transaction` rpc (@quake)
+
+### Features
+
+* #1900: Add RPC subscription, a.k.a, pub/sub (@quake)
+* #1908: Periodically disconnect peers which open invalid sub-protocols (@jjyr)
+
+# [v0.27.0](https://github.com/nervosnetwork/ckb/compare/v0.26.1...v0.27.0) (2020-01-10)
+
+### Features
+
+* #1882: Add tcp and websocket to rpc service (@quake). This is required for #1867.
+* #1890 **spec:** Configurable block bytes limit (@zhangsoledad)
+
+    Provide `max_block_bytes` option supports configurable block bytes limit.
+
+* #1891: Notify service (@quake)
+
+    This PR resolve #1860 and refactor network alert script notification by adding a notify service, and it's required to implement #1867.
+
+    **configuration  file breaking change**
+
+    ```diff
+    -# [alert_notifier]
+    -# # Script will be notified when node received an alert, first arg is alert message string.
+    -# notify_script = "echo"
+    +# [notifier]
+    +# # Execute command when the new tip block changes, first arg is block struct in json format string.
+    +# new_block_notify_script = "your_new_block_notify_script.sh"
+    +# # Execute command when node received an network alert, first arg is alert message string.
+    +# network_alert_notify_script = "your_network_alert_notify_script.sh"
+    ```
+### Bug Fixes
+
+* #1889: `get_cell_meta` should return None if output index does not exist (@jjyr)
+* #1895: Fix peer store saving failed due to temp dir does not exist (@jjyr)
+* #1899 **tests:** Rpc server should explicit close (@zhangsoledad)
+
+### Improvements
+
+* #1894: Reduce useless clone / to_owned use (@driftluo)
+
+    Reduce useless clone / to_owned use
+
+# [v0.26.1](https://github.com/nervosnetwork/ckb/compare/v0.26.0...v0.26.1) (2019-12-30)
+
+### Features
+
+* #1875 **P2P:** Move feeler behind identify (@driftluo)
+
+    after this pr, all protocol will open after `identify` open, avoid feeler interacting with different networks and compatible with older versions
+
+* #1888: Add `get_capacity_by_lock_hash` RPC (@quake)
+
+
+### Bug Fixes
+
+* #1874 **P2P:** Remove duplicate p2p phase in discovery protocol (@jjyr)
+
+    * Consider space-efficient, we do not store p2p phase of multiaddr in peer store.
+    * Reattach the p2p phase when we send multiaddr to other nodes.
+
+* #1859 **P2P:** Fix lost sync/relayer protocol registration (@driftluo)
+
+    fix lost sync/relayer protocol registration
+
+* #1873 **P2P:** Ban peer that are not on the same network (@driftluo)
+
+    If it cannot be parser, ban it, only two possibilities:
+    1. message format error（molecule）
+    2. not on same net
+
+# [v0.26.0](https://github.com/nervosnetwork/ckb/compare/v0.25.2...v0.26.0) (2019-12-13)
+
+### Features
+
+* #1836: Include calculated minimal fee in RPC's error response (@xxuejie)
+* #1838: Add `output_data_len` and `cellbase` to `get_cells_by_lock_hash` rpc (@quake)
+* #1864: Add `output_data_len` and `cellbase` to `get_live_cells_by_lock_hash` rpc (@quake)
+* #1851: upgrade p2p to 0.2.7 (@driftluo)
+    * Upgrade moleculec to 0.4.2
+    * Add transport connection number limit on listener
+* #1854: Upgrade ckb-vm to 0.18.1 (@xxuejie)
+    * Tweak slot calculation algorithm
+
+### Bug Fixes
+
+* #1863: `fetch_random_addrs` should be able to return peers addrs (@jjyr)
+
+### Improvements
+
+* #1839: After exiting the IBD mode, the invalid notify should be removed (@driftluo)
+* #1840: DB migration (@quake)
+
+    Database migration may involve multiple iterations and different db (indexer/chain store), this PR added a `Migration` trait and improve the API.
+
+* #1862: Move main chain shortcut to `get_ancestor` (@jjyr)
+
+    Move the main chain shortcut from `get_locator` to `get_ancestor`, there are bunch functions other than `get_locator` call `get_ancestor` directly, this change saves many DB queries when the base block on main chain.
+
+* #1853: Update error message and prompt of ckb init subcommand (@ashchan)
+* #1849: No debug symbols as default and add a command to build with debug symbols (@yangby-cryptape)
+
+# [v0.25.2](https://github.com/nervosnetwork/ckb/compare/v0.25.1...v0.25.2) (2019-11-17)
+
+### Features
+
+* #1824: Switch to mainnet (@doitian)
+
+    - `ckb init` initializes mainnet node by default.
+    - update docs related to mainnet.
+
+
+### Improvements
+
+* #1823: Enhance the binary packages. (@doitian)
+
+    - Static link openssl in macOS package, so it will not require openssl as a runtime dependency.
+    - Add bat files in Windows package to ease starting a node in Windows.
+
+
 # [v0.25.1](https://github.com/nervosnetwork/ckb/compare/v0.25.0...v0.25.1) (2019-11-15)
 
 Embed lina chain spec
@@ -1205,7 +1682,7 @@ This version is not compatible with v0.13.0, please init a new CKB directory.
 - #439: fix mining bug caused by type changes in RPC (@xxuejie)
 - #437: RPC `local_node_info` returns duplicated addr (@rink1969)
 - #418: try to repair a corrupted rocksdb automatically (@yangby-cryptape)
-- #414: clear tx verfy cache when chain reorg (@zhangsoledad)
+- #414: clear tx verify cache when chain reorg (@zhangsoledad)
 
 
 ### Features
@@ -1241,7 +1718,7 @@ This version is not compatible with v0.13.0, please init a new CKB directory.
 - RPC `get_live_cell` returns `(null, "unknown")` when looking up null out point before, while returns `(null, "live")` now.
 - RPC uses `string` to encode all 64bit integrers now.
 - The executble `ckb` requires config files now, use `ckb init` to export the default ones.
-- The new features tx valid sicne (#372) and removal of version from Script (#422) have changed the core data structure. They affect both RPC and the P2P messages flatbuffers schema.
+- The new features tx valid since (#372) and removal of version from Script (#422) have changed the core data structure. They affect both RPC and the P2P messages flatbuffers schema.
 
 
 # [v0.9.0](https://github.com/nervosnetwork/ckb/compare/v0.8.0...v0.9.0) (2019-04-22)

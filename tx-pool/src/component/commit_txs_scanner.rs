@@ -1,10 +1,8 @@
-use crate::{
-    component::{
-        entry::{TxEntry, TxModifiedEntries},
-        proposed::ProposedPool,
-    },
-    FeeRate,
+use crate::component::{
+    entry::{TxEntry, TxModifiedEntries},
+    proposed::ProposedPool,
 };
+use ckb_fee_estimator::FeeRate;
 use ckb_types::{core::Cycle, packed::ProposalShortId};
 use std::cmp::max;
 use std::collections::HashSet;
@@ -124,7 +122,7 @@ impl<'a> CommitTxsScanner<'a> {
                     ancestors.len(),
                     "proposed tx pool ancestors count inconsistent"
                 );
-                // update all decendents and insert into modified
+                // update all descendants and insert into modified
                 self.update_modified_entries(&ancestors);
                 // sort acestors by ancestors_count,
                 // if A is an ancestor of B, B.ancestors_count must large than A

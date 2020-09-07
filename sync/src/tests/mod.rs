@@ -1,17 +1,18 @@
 use ckb_network::{
-    Behaviour, CKBProtocolContext, CKBProtocolHandler, Peer, PeerIndex, ProtocolId, TargetSession,
+    bytes::Bytes, Behaviour, CKBProtocolContext, CKBProtocolHandler, Peer, PeerIndex, ProtocolId,
+    TargetSession,
 };
-use ckb_types::bytes::Bytes;
 use ckb_util::RwLock;
 use futures::future::Future;
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::sync::mpsc::{sync_channel, Receiver, SyncSender};
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 mod inflight_blocks;
-mod sync_shared_state;
+mod sync_shared;
 #[cfg(not(disable_faketime))]
 mod synchronizer;
 mod util;
@@ -137,7 +138,7 @@ impl TestNode {
 
 struct TestNetworkContext {
     protocol: ProtocolId,
-    msg_senders: HashMap<(ProtocolId, PeerIndex), SyncSender<bytes::Bytes>>,
+    msg_senders: HashMap<(ProtocolId, PeerIndex), SyncSender<Bytes>>,
     timer_senders: HashMap<(ProtocolId, u64), SyncSender<()>>,
 }
 
@@ -154,14 +155,16 @@ impl CKBProtocolContext for TestNetworkContext {
         Ok(())
     }
 
+    fn remove_notify(&self, _token: u64) -> Result<(), ckb_network::Error> {
+        Ok(())
+    }
+
     fn future_task(
         &self,
-        task: Box<
-            (dyn futures::future::Future<Item = (), Error = ()> + std::marker::Send + 'static),
-        >,
+        _task: Pin<Box<dyn Future<Output = ()> + 'static + Send>>,
         _blocking: bool,
     ) -> Result<(), ckb_network::Error> {
-        task.wait().expect("resolve future task error");
+        //        task.await.expect("resolve future task error");
         Ok(())
     }
 
@@ -191,7 +194,7 @@ impl CKBProtocolContext for TestNetworkContext {
         &self,
         proto_id: ProtocolId,
         peer_index: PeerIndex,
-        data: bytes::Bytes,
+        data: Bytes,
     ) -> Result<(), ckb_network::Error> {
         if let Some(sender) = self.msg_senders.get(&(proto_id, peer_index)) {
             let _ = sender.send(data);
@@ -201,7 +204,7 @@ impl CKBProtocolContext for TestNetworkContext {
     fn send_message_to(
         &self,
         peer_index: PeerIndex,
-        data: bytes::Bytes,
+        data: Bytes,
     ) -> Result<(), ckb_network::Error> {
         if let Some(sender) = self.msg_senders.get(&(self.protocol, peer_index)) {
             let _ = sender.send(data);
@@ -211,7 +214,7 @@ impl CKBProtocolContext for TestNetworkContext {
     fn filter_broadcast(
         &self,
         target: TargetSession,
-        data: bytes::Bytes,
+        data: Bytes,
     ) -> Result<(), ckb_network::Error> {
         match target {
             TargetSession::Single(peer) => self.send_message_to(peer, data).unwrap(),
@@ -233,6 +236,7 @@ impl CKBProtocolContext for TestNetworkContext {
     fn get_peer(&self, _peer_index: PeerIndex) -> Option<Peer> {
         None
     }
+    fn with_peer_mut(&self, _peer_index: PeerIndex, _f: Box<dyn FnOnce(&mut Peer)>) {}
     fn connected_peers(&self) -> Vec<PeerIndex> {
         self.msg_senders.keys().map(|k| k.1).collect::<Vec<_>>()
     }

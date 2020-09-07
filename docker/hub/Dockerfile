@@ -1,4 +1,4 @@
-FROM nervos/ckb-docker-builder:bionic-rust-1.38.0 as ckb-docker-builder
+FROM nervos/ckb-docker-builder:bionic-rust-1.45.2 as ckb-docker-builder
 
 WORKDIR /ckb
 COPY ./ .
@@ -19,13 +19,13 @@ COPY --from=ckb-docker-builder \
      /usr/lib/x86_64-linux-gnu/libssl.so.* \
      /usr/lib/x86_64-linux-gnu/libcrypto.so.* \
      /usr/lib/x86_64-linux-gnu/
-COPY --from=ckb-docker-builder /ckb/target/release/ckb /bin/ckb
-RUN /bin/ckb init --force \
- && chown -R ckb:ckb /var/lib/ckb \
+COPY --from=ckb-docker-builder /ckb/target/release/ckb /ckb/docker/docker-entrypoint.sh /bin/
+RUN chown -R ckb:ckb /var/lib/ckb \
  && chmod 755 /var/lib/ckb
 
 USER ckb
+ENV CKB_CHAIN=mainnet
 
 EXPOSE 8114 8115
 VOLUME ["/var/lib/ckb"]
-ENTRYPOINT ["/bin/ckb"]
+ENTRYPOINT ["/bin/docker-entrypoint.sh"]

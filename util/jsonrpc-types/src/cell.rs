@@ -1,10 +1,10 @@
-use crate::{Capacity, CellOutput, JsonBytes, OutPoint, Script};
+use crate::{Capacity, CellOutput, JsonBytes, OutPoint, Script, Uint64};
 use ckb_types::{
     core::cell::{CellMeta, CellStatus},
     prelude::Unpack,
     H256,
 };
-use serde_derive::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 
 // This is used as return value of get_cells_by_lock_hash RPC:
 // it contains both OutPoint data used for referencing a cell, as well as
@@ -17,6 +17,8 @@ pub struct CellOutputWithOutPoint {
     pub lock: Script,
     #[serde(rename = "type")]
     pub type_: Option<Script>,
+    pub output_data_len: Uint64,
+    pub cellbase: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -57,7 +59,7 @@ impl From<CellStatus> for CellWithStatus {
             CellStatus::Unknown => (None, "unknown"),
         };
         Self {
-            cell: cell.map(|cell_meta| (*cell_meta).into()),
+            cell: cell.map(Into::into),
             status: status.to_string(),
         }
     }

@@ -25,23 +25,45 @@ impl<'a, CS: ChainStore<'a>> RewardCalculator<'a, CS> {
 
     /// `RewardCalculator` is used to calculate block finalize target's reward according to the parent header.
     /// block reward consists of four parts: base block reward, tx fee, proposal reward, and secondary block reward.
-    pub fn block_reward(&self, parent: &HeaderView) -> Result<(Script, BlockReward), Error> {
-        let consensus = self.consensus;
-        let store = self.store;
-
+    pub fn block_reward_to_finalize(
+        &self,
+        parent: &HeaderView,
+    ) -> Result<(Script, BlockReward), Error> {
         let block_number = parent.number() + 1;
-        let target_number = consensus
+        let target_number = self
+            .consensus
             .finalize_target(block_number)
             .expect("block number checked before involving finalize_target");
-
         let target = self
             .store
             .get_block_hash(target_number)
             .and_then(|hash| self.store.get_block_header(&hash))
             .expect("block hash checked before involving get_ancestor");
+        self.block_reward_internal(&target, parent)
+    }
 
+    pub fn block_reward_for_target(
+        &self,
+        target: &HeaderView,
+    ) -> Result<(Script, BlockReward), Error> {
+        let finalization_parent_number =
+            target.number() + self.consensus.finalization_delay_length() - 1;
+        let parent = self
+            .store
+            .get_block_hash(finalization_parent_number)
+            .and_then(|hash| self.store.get_block_header(&hash))
+            .expect("block hash checked before involving get_ancestor");
+        self.block_reward_internal(target, &parent)
+    }
+
+    fn block_reward_internal(
+        &self,
+        target: &HeaderView,
+        parent: &HeaderView,
+    ) -> Result<(Script, BlockReward), Error> {
         let target_lock = CellbaseWitness::from_slice(
-            &store
+            &self
+                .store
                 .get_cellbase(&target.hash())
                 .expect("target cellbase exist")
                 .witnesses()
@@ -52,9 +74,9 @@ impl<'a, CS: ChainStore<'a>> RewardCalculator<'a, CS> {
         .expect("cellbase loaded from store should has non-empty witness")
         .lock();
 
-        let txs_fees = self.txs_fees(&target)?;
-        let proposal_reward = self.proposal_reward(parent, &target)?;
-        let (primary, secondary) = self.base_block_reward(&target)?;
+        let txs_fees = self.txs_fees(target)?;
+        let proposal_reward = self.proposal_reward(parent, target)?;
+        let (primary, secondary) = self.base_block_reward(target)?;
 
         let total = txs_fees
             .safe_add(proposal_reward)?
@@ -64,7 +86,7 @@ impl<'a, CS: ChainStore<'a>> RewardCalculator<'a, CS> {
         debug!(
             "[RewardCalculator] target {} {}\n
              txs_fees {:?}, proposal_reward {:?}, primary {:?}, secondary: {:?}, totol_reward {:?}",
-            target_number,
+            target.number(),
             target.hash(),
             txs_fees,
             proposal_reward,
@@ -272,13 +294,13 @@ mod tests {
             .build()
             .as_uncle();
         let uncle2 = BlockBuilder::default()
-            .proposal(proposal2.clone())
-            .proposal(proposal3.clone())
+            .proposal(proposal2)
+            .proposal(proposal3)
             .build()
             .as_uncle();
 
         let block = BlockBuilder::default()
-            .proposal(proposal1.clone())
+            .proposal(proposal1)
             .uncles(vec![uncle1, uncle2])
             .build();
 
@@ -312,7 +334,7 @@ mod tests {
         ];
         let ext = BlockExt {
             received_at: block.timestamp(),
-            total_difficulty: block.difficulty().to_owned(),
+            total_difficulty: block.difficulty(),
             total_uncles_count: block.data().uncles().len() as u64,
             verified: Some(true),
             txs_fees: ext_tx_fees,
@@ -392,7 +414,7 @@ mod tests {
                     .parent_hash(block_10.hash())
                     .build(),
             )
-            .proposal(p2.clone())
+            .proposal(p2)
             .uncle(uncle)
             .build();
 
@@ -405,10 +427,7 @@ mod tests {
             )
             .build();
 
-        let uncle = BlockBuilder::default()
-            .proposal(p6.clone())
-            .build()
-            .as_uncle();
+        let uncle = BlockBuilder::default().proposal(p6).build().as_uncle();
         let block_13 = BlockBuilder::default()
             .header(
                 HeaderBuilder::default()
@@ -416,7 +435,7 @@ mod tests {
                     .parent_hash(block_12.hash())
                     .build(),
             )
-            .proposals(vec![p1.clone(), p3.clone(), p4.clone(), p5.clone()])
+            .proposals(vec![p1, p3, p4.clone(), p5])
             .uncle(uncle)
             .build();
 
@@ -427,7 +446,7 @@ mod tests {
                     .parent_hash(block_13.hash())
                     .build(),
             )
-            .proposal(p4.clone())
+            .proposal(p4)
             .transaction(TransactionBuilder::default().build())
             .transactions(vec![tx1, tx2, tx3])
             .build();
@@ -440,7 +459,7 @@ mod tests {
                     .build(),
             )
             .transaction(TransactionBuilder::default().build())
-            .transaction(tx4.clone())
+            .transaction(tx4)
             .build();
         let block_16 = BlockBuilder::default()
             .header(
@@ -466,7 +485,7 @@ mod tests {
                     .build(),
             )
             .transaction(TransactionBuilder::default().build())
-            .transactions(vec![tx5.clone(), tx6.clone()])
+            .transactions(vec![tx5, tx6])
             .build();
 
         let ext_tx_fees_14 = vec![

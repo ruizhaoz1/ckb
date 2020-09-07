@@ -1,6 +1,6 @@
 [package]
 name = "ckb"
-version = "0.25.2-pre"
+version = "0.36.0-pre"
 license = "MIT"
 authors = ["Nervos Core Dev <dev@nervos.org>"]
 edition = "2018"
@@ -20,20 +20,28 @@ members = [
     # Members are ordered by dependencies. Crates at top has fewer dependencies.
     "util/build-info",
     "util/logger",
+    "util/logger-config",
+    "util/logger-service",
+    "util/metrics",
+    "util/metrics-config",
+    "util/metrics-service",
+    "util/memory-tracker",
     "util",
     "util/hash",
     "util/fixed-hash",
+    "util/chain-iter",
     "util/crypto",
     "util/rational",
     "util/multisig",
     "util/stop-handler",
     "util/occupied-capacity",
     "util/types",
-    "util/future-executor",
+    "util/runtime",
     "util/jsonrpc-types",
     "util/fee-estimator",
-    "script/data-loader",
+    "util/rust-unstable-port",
     "db",
+    "db-migration",
     "resource",
     "pow",
     "network",
@@ -60,11 +68,16 @@ members = [
     "ckb-bin",
     "benches",
     "error",
+    "notify",
 ]
 
 [profile.release]
-debug = true
 overflow-checks = true
 
 [target.'cfg(all(not(target_env = "msvc"), not(target_os="macos")))'.dependencies]
-jemallocator = { version = "0.3.0" }
+jemallocator = { version = "0.3.0", features = ["unprefixed_malloc_on_supported_platforms"] }
+
+[features]
+default = []
+deadlock_detection = ["ckb-bin/deadlock_detection"]
+profiling = ["jemallocator/profiling", "ckb-bin/profiling"]

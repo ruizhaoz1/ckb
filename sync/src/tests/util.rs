@@ -1,4 +1,4 @@
-use crate::SyncSharedState;
+use crate::SyncShared;
 use ckb_chain::{
     chain::{ChainController, ChainService},
     switch::Switch,
@@ -19,7 +19,7 @@ use ckb_types::{
 use std::collections::HashSet;
 use std::sync::Arc;
 
-pub fn build_chain(tip: BlockNumber) -> (SyncSharedState, ChainController) {
+pub fn build_chain(tip: BlockNumber) -> (SyncShared, ChainController) {
     let (shared, table) = SharedBuilder::default()
         .consensus(always_success_consensus())
         .build()
@@ -29,8 +29,8 @@ pub fn build_chain(tip: BlockNumber) -> (SyncSharedState, ChainController) {
         chain_service.start::<&str>(None)
     };
     generate_blocks(&shared, &chain_controller, tip);
-    let sync_shared_state = SyncSharedState::new(shared);
-    (sync_shared_state, chain_controller)
+    let sync_shared = SyncShared::new(shared, Default::default());
+    (sync_shared, chain_controller)
 }
 
 pub fn generate_blocks(
@@ -40,10 +40,10 @@ pub fn generate_blocks(
 ) {
     let snapshot = shared.snapshot();
     let parent_number = snapshot.tip_number();
-    let mut parent_hash = snapshot.tip_header().hash().clone();
+    let mut parent_hash = snapshot.tip_header().hash();
     for _ in parent_number..target_tip {
         let block = inherit_block(shared, &parent_hash).build();
-        parent_hash = block.header().hash().to_owned();
+        parent_hash = block.header().hash();
         chain_controller
             .internal_process_block(Arc::new(block), Switch::DISABLE_ALL)
             .expect("processing block should be ok");
@@ -64,7 +64,7 @@ pub fn inherit_block(shared: &Shared, parent_hash: &Byte32) -> BlockBuilder {
     };
     let dao = {
         let resolved_cellbase = resolve_transaction(
-            cellbase.clone(),
+            cellbase,
             &mut HashSet::new(),
             snapshot.as_ref(),
             snapshot.as_ref(),

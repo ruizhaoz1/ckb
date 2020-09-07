@@ -1,6 +1,6 @@
 use crate::BAD_MESSAGE_BAN_TIME;
 use ckb_logger::{debug, info, warn};
-use ckb_network::{CKBProtocolContext, CKBProtocolHandler, PeerIndex};
+use ckb_network::{bytes::Bytes, CKBProtocolContext, CKBProtocolHandler, PeerIndex};
 use ckb_types::{packed, prelude::*};
 use ckb_util::RwLock;
 use std::collections::VecDeque;
@@ -115,7 +115,7 @@ impl CKBProtocolHandler for NetTimeProtocol {
         if let Some(true) = nc.get_peer(peer_index).map(|peer| peer.is_inbound()) {
             let now = faketime::unix_time_as_millis();
             let time = packed::Time::new_builder().timestamp(now.pack()).build();
-            if let Err(err) = nc.send_message_to(peer_index, time.as_slice().into()) {
+            if let Err(err) = nc.send_message_to(peer_index, time.as_bytes()) {
                 debug!("net_time_checker send message error: {:?}", err);
             }
         }
@@ -125,7 +125,7 @@ impl CKBProtocolHandler for NetTimeProtocol {
         &mut self,
         nc: Arc<dyn CKBProtocolContext + Sync>,
         peer_index: PeerIndex,
-        data: bytes::Bytes,
+        data: Bytes,
     ) {
         if let Some(true) = nc.get_peer(peer_index).map(|peer| peer.is_inbound()) {
             info!(

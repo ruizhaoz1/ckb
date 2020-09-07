@@ -1,10 +1,9 @@
 use crate::block_status::BlockStatus;
 use crate::synchronizer::Synchronizer;
-use crate::{MAX_BLOCKS_IN_TRANSIT_PER_PEER, MAX_HEADERS_LEN};
-use ckb_logger::{debug, warn};
+use crate::{Status, StatusCode, INIT_BLOCKS_IN_TRANSIT_PER_PEER, MAX_HEADERS_LEN};
+use ckb_logger::debug;
 use ckb_network::{CKBProtocolContext, PeerIndex};
 use ckb_types::{packed, prelude::*};
-use failure::{err_msg, Error as FailureError};
 
 pub struct GetBlocksProcess<'a> {
     message: packed::GetBlocksReader<'a>,
@@ -28,22 +27,23 @@ impl<'a> GetBlocksProcess<'a> {
         }
     }
 
-    pub fn execute(self) -> Result<(), FailureError> {
+    pub fn execute(self) -> Status {
         let block_hashes = self.message.block_hashes();
-        // use MAX_HEADERS_LEN as limit, we may increase the value of MAX_BLOCKS_IN_TRANSIT_PER_PEER in the future
+        // use MAX_HEADERS_LEN as limit, we may increase the value of INIT_BLOCKS_IN_TRANSIT_PER_PEER in the future
         if block_hashes.len() > MAX_HEADERS_LEN {
-            warn!("Peer {} sends us an invalid message, GetBlocks block_hashes size ({}) is greater than MAX_HEADERS_LEN ({})", self.peer, block_hashes.len(), MAX_HEADERS_LEN);
-            return Err(err_msg(
-                "GetBlocks block_hashes size is greater than MAX_HEADERS_LEN".to_owned(),
+            return StatusCode::ProtocolMessageIsMalformed.with_context(format!(
+                "BlockHashes count({}) > MAX_HEADERS_LEN({})",
+                block_hashes.len(),
+                MAX_HEADERS_LEN,
             ));
         }
-        let snapshot = self.synchronizer.shared.snapshot();
+        let active_chain = self.synchronizer.shared.active_chain();
 
-        for block_hash in block_hashes.iter().take(MAX_BLOCKS_IN_TRANSIT_PER_PEER) {
+        for block_hash in block_hashes.iter().take(INIT_BLOCKS_IN_TRANSIT_PER_PEER) {
             debug!("get_blocks {} from peer {:?}", block_hash, self.peer);
             let block_hash = block_hash.to_entity();
 
-            if !snapshot.contains_block_status(&block_hash, BlockStatus::BLOCK_VALID) {
+            if !active_chain.contains_block_status(&block_hash, BlockStatus::BLOCK_VALID) {
                 debug!(
                     "ignoring get_block {} request from peer={} for unverified",
                     block_hash, self.peer
@@ -59,7 +59,7 @@ impl<'a> GetBlocksProcess<'a> {
                 break;
             }
 
-            if let Some(block) = snapshot.get_block(&block_hash) {
+            if let Some(block) = active_chain.get_block(&block_hash) {
                 debug!(
                     "respond_block {} {} to peer {:?}",
                     block.number(),
@@ -68,11 +68,12 @@ impl<'a> GetBlocksProcess<'a> {
                 );
                 let content = packed::SendBlock::new_builder().block(block.data()).build();
                 let message = packed::SyncMessage::new_builder().set(content).build();
-                let data = message.as_slice().into();
-                if let Err(err) = self.nc.send_message_to(self.peer, data) {
-                    debug!("synchronizer send Block error: {:?}", err);
-                    break;
+
+                if let Err(err) = self.nc.send_message_to(self.peer, message.as_bytes()) {
+                    return StatusCode::Network
+                        .with_context(format!("Send SendBlock error: {:?}", err));
                 }
+                crate::synchronizer::metrics_counter_send(message.to_enum().item_name());
             } else {
                 // TODO response not found
                 // TODO add timeout check in synchronizer
@@ -85,6 +86,6 @@ impl<'a> GetBlocksProcess<'a> {
             }
         }
 
-        Ok(())
+        Status::ok()
     }
 }

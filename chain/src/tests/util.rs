@@ -5,8 +5,8 @@ use ckb_dao_utils::genesis_dao_data;
 use ckb_shared::shared::Shared;
 use ckb_shared::shared::SharedBuilder;
 use ckb_store::ChainStore;
-use ckb_test_chain_utils::always_success_cell;
 pub use ckb_test_chain_utils::MockStore;
+use ckb_test_chain_utils::{always_success_cell, load_input_data_hash_cell};
 use ckb_types::prelude::*;
 use ckb_types::{
     bytes::Bytes,
@@ -32,6 +32,21 @@ pub(crate) fn create_always_success_tx() -> TransactionView {
         .output(always_success_cell.clone())
         .output_data(always_success_cell_data.pack())
         .build()
+}
+
+pub(crate) fn create_load_input_data_hash_cell_tx() -> TransactionView {
+    let (ref load_input_data_hash_cell_cell, ref load_input_data_hash_cell_data, ref script) =
+        load_input_data_hash_cell();
+    TransactionBuilder::default()
+        .witness(script.clone().into_witness())
+        .input(CellInput::new(OutPoint::null(), 0))
+        .output(load_input_data_hash_cell_cell.clone())
+        .output_data(load_input_data_hash_cell_data.pack())
+        .build()
+}
+
+pub(crate) fn create_load_input_data_hash_cell_out_point() -> OutPoint {
+    OutPoint::new(create_load_input_data_hash_cell_tx().hash(), 0)
 }
 
 // NOTE: this is quite a waste of resource but the alternative is to modify 100+
@@ -242,6 +257,12 @@ impl<'a> MockChain<'a> {
         self.blocks.push(block);
     }
 
+    pub fn rollback(&mut self, store: &MockStore) {
+        if let Some(block) = self.blocks.pop() {
+            store.remove_block(&block);
+        }
+    }
+
     pub fn gen_block_with_proposal_txs(&mut self, txs: Vec<TransactionView>, store: &MockStore) {
         let parent = self.tip_header();
         let cellbase = create_cellbase(store, self.consensus, &parent);
@@ -258,7 +279,7 @@ impl<'a> MockChain<'a> {
             .unwrap_or(last_epoch);
 
         let new_block = BlockBuilder::default()
-            .parent_hash(parent.hash().to_owned())
+            .parent_hash(parent.hash())
             .number((parent.number() + 1).pack())
             .compact_target(epoch.compact_target().pack())
             .epoch(epoch.number_with_fraction(parent.number() + 1).pack())
@@ -270,13 +291,35 @@ impl<'a> MockChain<'a> {
         self.commit_block(store, new_block)
     }
 
+    pub fn gen_block_with_proposal_ids(
+        &mut self,
+        difficulty: u64,
+        ids: Vec<packed::ProposalShortId>,
+        store: &MockStore,
+    ) {
+        let parent = self.tip_header();
+        let cellbase = create_cellbase(store, self.consensus, &parent);
+        let dao = dao_data(&self.consensus, &parent, &[cellbase.clone()], store, false);
+
+        let new_block = BlockBuilder::default()
+            .parent_hash(parent.hash())
+            .number((parent.number() + 1).pack())
+            .compact_target(difficulty_to_compact(U256::from(difficulty)).pack())
+            .dao(dao)
+            .transaction(cellbase)
+            .proposals(ids)
+            .build();
+
+        self.commit_block(store, new_block)
+    }
+
     pub fn gen_empty_block_with_diff(&mut self, difficulty: u64, store: &MockStore) {
         let parent = self.tip_header();
         let cellbase = create_cellbase(store, self.consensus, &parent);
         let dao = dao_data(&self.consensus, &parent, &[cellbase.clone()], store, false);
 
         let new_block = BlockBuilder::default()
-            .parent_hash(parent.hash().to_owned())
+            .parent_hash(parent.hash())
             .number((parent.number() + 1).pack())
             .compact_target(difficulty_to_compact(U256::from(difficulty)).pack())
             .dao(dao)
@@ -293,7 +336,7 @@ impl<'a> MockChain<'a> {
         let dao = dao_data(&self.consensus, &parent, &[cellbase.clone()], store, false);
 
         let new_block = BlockBuilder::default()
-            .parent_hash(parent.hash().to_owned())
+            .parent_hash(parent.hash())
             .number((parent.number() + 1).pack())
             .compact_target(difficulty_to_compact(difficulty + U256::from(inc)).pack())
             .dao(dao)
@@ -319,7 +362,7 @@ impl<'a> MockChain<'a> {
             .unwrap_or(last_epoch);
 
         let new_block = BlockBuilder::default()
-            .parent_hash(parent.hash().to_owned())
+            .parent_hash(parent.hash())
             .number((parent.number() + 1).pack())
             .compact_target(epoch.compact_target().pack())
             .epoch(epoch.number_with_fraction(parent.number() + 1).pack())
@@ -347,7 +390,7 @@ impl<'a> MockChain<'a> {
             .unwrap_or(last_epoch);
 
         let new_block = BlockBuilder::default()
-            .parent_hash(parent.hash().to_owned())
+            .parent_hash(parent.hash())
             .number((parent.number() + 1).pack())
             .compact_target(epoch.compact_target().pack())
             .epoch(epoch.number_with_fraction(parent.number() + 1).pack())
@@ -387,7 +430,7 @@ impl<'a> MockChain<'a> {
             .unwrap_or(last_epoch);
 
         let new_block = BlockBuilder::default()
-            .parent_hash(parent.hash().to_owned())
+            .parent_hash(parent.hash())
             .number((parent.number() + 1).pack())
             .compact_target(epoch.compact_target().pack())
             .epoch(epoch.number_with_fraction(parent.number() + 1).pack())
@@ -410,7 +453,7 @@ impl<'a> MockChain<'a> {
     }
 
     pub fn difficulty(&self) -> U256 {
-        self.tip_header().difficulty().to_owned()
+        self.tip_header().difficulty()
     }
 
     pub fn blocks(&self) -> &Vec<BlockView> {

@@ -20,19 +20,19 @@ impl_conversion_for_entity_unpack!(bool, Bool);
 
 impl Pack<packed::Uint32> for u32 {
     fn pack(&self) -> packed::Uint32 {
-        packed::Uint32::new_unchecked(Bytes::from(&self.to_le_bytes()[..]))
+        packed::Uint32::new_unchecked(Bytes::from(self.to_le_bytes().to_vec()))
     }
 }
 
 impl Pack<packed::Uint64> for u64 {
     fn pack(&self) -> packed::Uint64 {
-        packed::Uint64::new_unchecked(Bytes::from(&self.to_le_bytes()[..]))
+        packed::Uint64::new_unchecked(Bytes::from(self.to_le_bytes().to_vec()))
     }
 }
 
 impl Pack<packed::Uint128> for u128 {
     fn pack(&self) -> packed::Uint128 {
-        packed::Uint128::new_unchecked(Bytes::from(&self.to_le_bytes()[..]))
+        packed::Uint128::new_unchecked(Bytes::from(self.to_le_bytes().to_vec()))
     }
 }
 
@@ -43,28 +43,28 @@ impl Pack<packed::Uint32> for usize {
 }
 
 impl<'r> Unpack<u32> for packed::Uint32Reader<'r> {
-    #[allow(clippy::cast_ptr_alignment)]
     fn unpack(&self) -> u32 {
-        let le = self.as_slice().as_ptr() as *const u32;
-        u32::from_le(unsafe { *le })
+        let mut b = [0u8; 4];
+        b.copy_from_slice(self.as_slice());
+        u32::from_le_bytes(b)
     }
 }
 impl_conversion_for_entity_unpack!(u32, Uint32);
 
 impl<'r> Unpack<u64> for packed::Uint64Reader<'r> {
-    #[allow(clippy::cast_ptr_alignment)]
     fn unpack(&self) -> u64 {
-        let le = self.as_slice().as_ptr() as *const u64;
-        u64::from_le(unsafe { *le })
+        let mut b = [0u8; 8];
+        b.copy_from_slice(self.as_slice());
+        u64::from_le_bytes(b)
     }
 }
 impl_conversion_for_entity_unpack!(u64, Uint64);
 
 impl<'r> Unpack<u128> for packed::Uint128Reader<'r> {
-    #[allow(clippy::cast_ptr_alignment)]
     fn unpack(&self) -> u128 {
-        let le = self.as_slice().as_ptr() as *const u128;
-        u128::from_le(unsafe { *le })
+        let mut b = [0u8; 16];
+        b.copy_from_slice(self.as_slice());
+        u128::from_le_bytes(b)
     }
 }
 impl_conversion_for_entity_unpack!(u128, Uint128);
@@ -79,13 +79,13 @@ impl_conversion_for_entity_unpack!(usize, Uint32);
 
 impl Pack<packed::BeUint32> for u32 {
     fn pack(&self) -> packed::BeUint32 {
-        packed::BeUint32::new_unchecked(Bytes::from(&self.to_be_bytes()[..]))
+        packed::BeUint32::new_unchecked(Bytes::from(self.to_be_bytes().to_vec()))
     }
 }
 
 impl Pack<packed::BeUint64> for u64 {
     fn pack(&self) -> packed::BeUint64 {
-        packed::BeUint64::new_unchecked(Bytes::from(&self.to_be_bytes()[..]))
+        packed::BeUint64::new_unchecked(Bytes::from(self.to_be_bytes().to_vec()))
     }
 }
 
@@ -96,19 +96,19 @@ impl Pack<packed::BeUint32> for usize {
 }
 
 impl<'r> Unpack<u32> for packed::BeUint32Reader<'r> {
-    #[allow(clippy::cast_ptr_alignment)]
     fn unpack(&self) -> u32 {
-        let be = self.as_slice().as_ptr() as *const u32;
-        u32::from_be(unsafe { *be })
+        let mut b = [0u8; 4];
+        b.copy_from_slice(self.as_slice());
+        u32::from_be_bytes(b)
     }
 }
 impl_conversion_for_entity_unpack!(u32, BeUint32);
 
 impl<'r> Unpack<u64> for packed::BeUint64Reader<'r> {
-    #[allow(clippy::cast_ptr_alignment)]
     fn unpack(&self) -> u64 {
-        let be = self.as_slice().as_ptr() as *const u64;
-        u64::from_be(unsafe { *be })
+        let mut b = [0u8; 8];
+        b.copy_from_slice(self.as_slice());
+        u64::from_be_bytes(b)
     }
 }
 impl_conversion_for_entity_unpack!(u64, BeUint64);
@@ -149,6 +149,11 @@ impl<'r> packed::BytesReader<'r> {
         ::std::str::from_utf8(self.raw_data())
     }
 
+    /// # Safety
+    ///
+    /// This function is unsafe because it does not check that the bytes passed to
+    /// it are valid UTF-8. If this constraint is violated, undefined behavior
+    /// results, as the rest of Rust assumes that [`&str`]s are valid UTF-8.
     pub unsafe fn as_utf8_unchecked(&self) -> &str {
         ::std::str::from_utf8_unchecked(self.raw_data())
     }

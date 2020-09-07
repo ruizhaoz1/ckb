@@ -1,8 +1,8 @@
 use crate::relayer::Relayer;
-use ckb_logger::{debug_target, warn};
+use crate::{Status, StatusCode};
+use ckb_logger::debug_target;
 use ckb_network::{CKBProtocolContext, PeerIndex};
 use ckb_types::{packed, prelude::*};
-use failure::{err_msg, Error as FailureError};
 use std::sync::Arc;
 
 pub struct GetBlockProposalProcess<'a> {
@@ -27,17 +27,16 @@ impl<'a> GetBlockProposalProcess<'a> {
         }
     }
 
-    pub fn execute(self) -> Result<(), FailureError> {
-        let snapshot = self.relayer.shared.snapshot();
+    pub fn execute(self) -> Status {
+        let shared = self.relayer.shared();
         {
             let get_block_proposal = self.message;
-            let limit = snapshot.consensus().max_block_proposals_limit()
-                * (snapshot.consensus().max_uncles_num() as u64);
+            let limit = shared.consensus().max_block_proposals_limit()
+                * (shared.consensus().max_uncles_num() as u64);
             if (get_block_proposal.proposals().len() as u64) > limit {
-                warn!("Peer {} sends us an invalid message, GetBlockProposal proposals size ({}) is greater than consensus limit ({})",
-                    self.peer, get_block_proposal.proposals().len(), limit);
-                return Err(err_msg(
-                    "GetBlockProposal proposals size is greater than consensus limit".to_owned(),
+                return StatusCode::ProtocolMessageIsMalformed.with_context(format!(
+                    "GetBlockProposal proposals count({}) > consensus max_block_proposals_limit({})",
+                    get_block_proposal.proposals().len(), limit,
                 ));
             }
         }
@@ -54,7 +53,7 @@ impl<'a> GetBlockProposalProcess<'a> {
                     "relayer tx_pool_controller send fetch_txs error: {:?}",
                     e
                 );
-                return Ok(());
+                return Status::ok();
             }
             fetch_txs.unwrap()
         };
@@ -77,15 +76,11 @@ impl<'a> GetBlockProposalProcess<'a> {
             )
             .build();
         let message = packed::RelayMessage::new_builder().set(content).build();
-        let data = message.as_slice().into();
 
-        if let Err(err) = self.nc.send_message_to(self.peer, data) {
-            debug_target!(
-                crate::LOG_TARGET_RELAY,
-                "relayer send GetBlockProposal error: {:?}",
-                err
-            );
+        if let Err(err) = self.nc.send_message_to(self.peer, message.as_bytes()) {
+            StatusCode::Network.with_context(format!("Send GetBlockProposal error: {:?}", err,));
         }
-        Ok(())
+        crate::relayer::metrics_counter_send(message.to_enum().item_name());
+        Status::ok()
     }
 }

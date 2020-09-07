@@ -4,10 +4,9 @@ use crate::utils::{
 };
 use crate::{Net, Spec, TestProtocol, DEFAULT_TX_PROPOSAL_WINDOW};
 use ckb_dao::DaoCalculator;
-use ckb_sync::NetworkProtocol;
+use ckb_network::{bytes::Bytes, SupportProtocols};
 use ckb_test_chain_utils::MockStore;
 use ckb_types::{
-    bytes::Bytes,
     core::{
         cell::{resolve_transaction, ResolvedTransaction},
         BlockBuilder, HeaderBuilder, HeaderView, TransactionBuilder,
@@ -48,7 +47,7 @@ impl Spec for CompactBlockEmptyParentUnknown {
             .build();
         let tip_block = node.get_tip_block();
         net.send(
-            NetworkProtocol::RELAY.into(),
+            SupportProtocols::Relay.protocol_id(),
             peer_id,
             build_compact_block(&parent_unknown_block),
         );
@@ -82,7 +81,7 @@ impl Spec for CompactBlockEmpty {
 
         let new_empty_block = node.new_block(None, None, None);
         net.send(
-            NetworkProtocol::RELAY.into(),
+            SupportProtocols::Relay.protocol_id(),
             peer_id,
             build_compact_block(&new_empty_block),
         );
@@ -107,7 +106,7 @@ impl Spec for CompactBlockPrefilled {
         node.generate_blocks((DEFAULT_TX_PROPOSAL_WINDOW.1 + 2) as usize);
 
         // Proposal a tx, and grow up into proposal window
-        let new_tx = node.new_transaction(node.get_tip_block().transactions()[0].hash().clone());
+        let new_tx = node.new_transaction(node.get_tip_block().transactions()[0].hash());
         node.submit_block(
             &node
                 .new_block_builder(None, None, None)
@@ -122,7 +121,7 @@ impl Spec for CompactBlockPrefilled {
             .transaction(new_tx)
             .build();
         net.send(
-            NetworkProtocol::RELAY.into(),
+            SupportProtocols::Relay.protocol_id(),
             peer_id,
             build_compact_block_with_prefilled(&new_block, vec![1]),
         );
@@ -151,7 +150,7 @@ impl Spec for CompactBlockMissingFreshTxs {
         let (peer_id, _, _) = net.receive();
 
         node.generate_blocks((DEFAULT_TX_PROPOSAL_WINDOW.1 + 2) as usize);
-        let new_tx = node.new_transaction(node.get_tip_block().transactions()[0].hash().clone());
+        let new_tx = node.new_transaction(node.get_tip_block().transactions()[0].hash());
         node.submit_block(
             &node
                 .new_block_builder(None, None, None)
@@ -171,7 +170,7 @@ impl Spec for CompactBlockMissingFreshTxs {
             .transaction(new_tx)
             .build();
         net.send(
-            NetworkProtocol::RELAY.into(),
+            SupportProtocols::Relay.protocol_id(),
             peer_id,
             build_compact_block(&new_block),
         );
@@ -216,7 +215,7 @@ impl Spec for CompactBlockMissingNotFreshTxs {
         node.generate_blocks((DEFAULT_TX_PROPOSAL_WINDOW.1 + 2) as usize);
 
         // Build the target transaction
-        let new_tx = node.new_transaction(node.get_tip_block().transactions()[0].hash().clone());
+        let new_tx = node.new_transaction(node.get_tip_block().transactions()[0].hash());
         node.submit_block(
             &node
                 .new_block_builder(None, None, None)
@@ -237,7 +236,7 @@ impl Spec for CompactBlockMissingNotFreshTxs {
         // Relay the target block
         clear_messages(&net);
         net.send(
-            NetworkProtocol::RELAY.into(),
+            SupportProtocols::Relay.protocol_id(),
             peer_id,
             build_compact_block(&new_block),
         );
@@ -267,7 +266,7 @@ impl Spec for CompactBlockLoseGetBlockTransactions {
         let _ = net.receive();
         node0.generate_blocks((DEFAULT_TX_PROPOSAL_WINDOW.1 + 2) as usize);
 
-        let new_tx = node0.new_transaction(node0.get_tip_block().transactions()[0].hash().clone());
+        let new_tx = node0.new_transaction(node0.get_tip_block().transactions()[0].hash());
         node0.submit_block(
             &node0
                 .new_block_builder(None, None, None)
@@ -294,7 +293,7 @@ impl Spec for CompactBlockLoseGetBlockTransactions {
         // Net send the compact block to node0, but dose not send the corresponding missing
         // block transactions. It will make node0 unable to reconstruct the complete block
         net.send(
-            NetworkProtocol::RELAY.into(),
+            SupportProtocols::Relay.protocol_id(),
             peer_id0,
             build_compact_block(&block),
         );
@@ -334,8 +333,6 @@ impl Spec for CompactBlockRelayParentOfOrphanBlock {
     fn run(&self, net: &mut Net) {
         let node = &net.nodes[0];
         net.exit_ibd_mode();
-        net.connect(node);
-        let (peer_id, _, _) = net.receive();
 
         node.generate_blocks((DEFAULT_TX_PROPOSAL_WINDOW.1 + 2) as usize);
         // Proposal a tx, and grow up into proposal window
@@ -369,12 +366,7 @@ impl Spec for CompactBlockRelayParentOfOrphanBlock {
         let dao = calculator
             .dao_field(&rtxs, &node.get_tip_block().header())
             .unwrap();
-        let header = parent
-            .header()
-            .to_owned()
-            .as_advanced_builder()
-            .dao(dao)
-            .build();
+        let header = parent.header().as_advanced_builder().dao(dao).build();
         let parent = parent.as_advanced_builder().header(header).build();
         mock_store.insert_block(&parent, consensus.genesis_epoch_ext());
 
@@ -421,7 +413,6 @@ impl Spec for CompactBlockRelayParentOfOrphanBlock {
             .header(
                 parent
                     .header()
-                    .to_owned()
                     .as_advanced_builder()
                     .number((parent.header().number() + 1).pack())
                     .timestamp((parent.header().timestamp() + 1).pack())
@@ -438,31 +429,37 @@ impl Spec for CompactBlockRelayParentOfOrphanBlock {
             .build();
         let old_tip = node.get_tip_block().header().number();
 
+        net.connect(node);
+        let (peer_id, _, _) = net.receive();
+
         net.send(
-            NetworkProtocol::RELAY.into(),
+            SupportProtocols::Relay.protocol_id(),
             peer_id,
             build_compact_block(&parent),
         );
-        // pending for GetBlockTransactions
-        clear_messages(&net);
 
         net.send(
-            NetworkProtocol::SYNC.into(),
+            SupportProtocols::Sync.protocol_id(),
             peer_id,
             build_header(&parent.header()),
         );
         net.send(
-            NetworkProtocol::SYNC.into(),
+            SupportProtocols::Sync.protocol_id(),
             peer_id,
             build_header(&block.header()),
         );
-        clear_messages(&net);
 
-        net.send(NetworkProtocol::SYNC.into(), peer_id, build_block(&block));
         net.send(
-            NetworkProtocol::RELAY.into(),
+            SupportProtocols::Relay.protocol_id(),
             peer_id,
             build_block_transactions(&parent),
+        );
+
+        clear_messages(&net);
+        net.send(
+            SupportProtocols::Sync.protocol_id(),
+            peer_id,
+            build_block(&block),
         );
 
         let ret = wait_until(20, move || {
@@ -503,7 +500,7 @@ impl Spec for CompactBlockRelayLessThenSharedBestKnown {
             .map(|i| node1.rpc_client().get_header_by_number(i).unwrap().into())
             .collect();
         net.send(
-            NetworkProtocol::SYNC.into(),
+            SupportProtocols::Sync.protocol_id(),
             peer_id,
             build_headers(&headers),
         );
@@ -521,13 +518,13 @@ impl Spec for CompactBlockRelayLessThenSharedBestKnown {
 
         let new_block = node0.new_block(None, None, None);
         net.send(
-            NetworkProtocol::RELAY.into(),
+            SupportProtocols::Relay.protocol_id(),
             peer_id,
             build_compact_block(&new_block),
         );
         assert!(
             wait_until(20, move || node0.get_tip_block().header().number() == old_tip + 1),
-            "node0 should process the new block, even its difficulty is less then best_shared_known",
+            "node0 should process the new block, even its difficulty is less than best_shared_known",
         );
     }
 }

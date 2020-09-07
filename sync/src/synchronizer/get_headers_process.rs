@@ -1,13 +1,12 @@
 use crate::synchronizer::Synchronizer;
-use crate::{NetworkProtocol, MAX_LOCATOR_SIZE, SYNC_USELESS_BAN_TIME};
-use ckb_logger::{debug, info, warn};
-use ckb_network::{CKBProtocolContext, PeerIndex};
+use crate::{Status, StatusCode, MAX_LOCATOR_SIZE};
+use ckb_logger::{debug, info};
+use ckb_network::{CKBProtocolContext, PeerIndex, SupportProtocols};
 use ckb_types::{
     core,
     packed::{self, Byte32},
     prelude::*,
 };
-use failure::{err_msg, Error as FailureError};
 
 pub struct GetHeadersProcess<'a> {
     message: packed::GetHeadersReader<'a>,
@@ -31,16 +30,8 @@ impl<'a> GetHeadersProcess<'a> {
         }
     }
 
-    pub fn execute(self) -> Result<(), FailureError> {
-        let snapshot = self.synchronizer.shared.snapshot();
-        if snapshot.is_initial_block_download() {
-            info!(
-                "Ignoring getheaders from peer={} because node is in initial block download",
-                self.peer
-            );
-            self.send_in_ibd();
-            return Ok(());
-        }
+    pub fn execute(self) -> Status {
+        let active_chain = self.synchronizer.shared.active_chain();
 
         let block_locator_hashes = self
             .message
@@ -51,27 +42,39 @@ impl<'a> GetHeadersProcess<'a> {
         let hash_stop = self.message.hash_stop().to_entity();
         let locator_size = block_locator_hashes.len();
         if locator_size > MAX_LOCATOR_SIZE {
-            warn!(
-                " getheaders locator size {} from peer={}",
-                locator_size, self.peer
-            );
-            return Err(err_msg(
-                "locator size is greater than MAX_LOCATOR_SIZE".to_owned(),
+            return StatusCode::ProtocolMessageIsMalformed.with_context(format!(
+                "Locator count({}) > MAX_LOCATOR_SIZE({})",
+                locator_size, MAX_LOCATOR_SIZE,
             ));
         }
 
+        if active_chain.is_initial_block_download() {
+            info!(
+                "Ignoring getheaders from peer={} because node is in initial block download",
+                self.peer
+            );
+            self.send_in_ibd();
+            let state = self.synchronizer.shared.state();
+            if let Some(flag) = state.peers().get_flag(self.peer) {
+                if flag.is_outbound || flag.is_whitelist || flag.is_protect {
+                    state.insert_peer_unknown_header_list(self.peer, block_locator_hashes);
+                }
+            };
+            return Status::ignored();
+        }
+
         if let Some(block_number) =
-            snapshot.locate_latest_common_block(&hash_stop, &block_locator_hashes[..])
+            active_chain.locate_latest_common_block(&hash_stop, &block_locator_hashes[..])
         {
             debug!(
                 "headers latest_common={} tip={} begin",
                 block_number,
-                snapshot.tip_header().number(),
+                active_chain.tip_header().number(),
             );
 
             self.synchronizer.peers().getheaders_received(self.peer);
             let headers: Vec<core::HeaderView> =
-                snapshot.get_locator_response(block_number, &hash_stop);
+                active_chain.get_locator_response(block_number, &hash_stop);
             // response headers
 
             debug!("headers len={}", headers.len());
@@ -80,32 +83,28 @@ impl<'a> GetHeadersProcess<'a> {
                 .headers(headers.into_iter().map(|x| x.data()).pack())
                 .build();
             let message = packed::SyncMessage::new_builder().set(content).build();
-            let data = message.as_slice().into();
-            if let Err(err) = self.nc.send_message_to(self.peer, data) {
-                debug!("synchronizer send Headers error: {:?}", err);
+
+            if let Err(err) = self.nc.send_message_to(self.peer, message.as_bytes()) {
+                return StatusCode::Network
+                    .with_context(format!("Send SendHeaders error: {:?}", err,));
             }
+            crate::synchronizer::metrics_counter_send(message.to_enum().item_name());
         } else {
-            for hash in &block_locator_hashes[..] {
-                warn!("unknown block headers from peer {} {}", self.peer, hash);
-            }
-            // Got 'headers' message without known blocks
-            self.nc.ban_peer(
-                self.peer,
-                SYNC_USELESS_BAN_TIME,
-                String::from("send us headers with unknown-block"),
-            );
+            return StatusCode::GetHeadersMissCommonAncestors
+                .with_context(format!("{:#x?}", block_locator_hashes,));
         }
-        Ok(())
+        Status::ok()
     }
 
     fn send_in_ibd(&self) {
         let content = packed::InIBD::new_builder().build();
         let message = packed::SyncMessage::new_builder().set(content).build();
-        let data = message.as_slice().into();
-        if let Err(err) = self
-            .nc
-            .send_message(NetworkProtocol::SYNC.into(), self.peer, data)
-        {
+
+        if let Err(err) = self.nc.send_message(
+            SupportProtocols::Sync.protocol_id(),
+            self.peer,
+            message.as_bytes(),
+        ) {
             debug!("synchronizer send in ibd error: {:?}", err);
         }
     }

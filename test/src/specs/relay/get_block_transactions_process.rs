@@ -1,7 +1,6 @@
 use crate::{Net, Spec, TestProtocol};
-use ckb_sync::NetworkProtocol;
+use ckb_network::{bytes::Bytes, SupportProtocols};
 use ckb_types::{
-    bytes::Bytes,
     core::UncleBlockView,
     packed::{self, RelayMessage},
     prelude::*,
@@ -26,13 +25,12 @@ impl Spec for MissingUncleRequest {
 
         let builder = node.new_block_builder(None, None, None);
         let block1 = builder.clone().nonce(0.pack()).build();
-        let block2 = builder.clone().nonce(1.pack()).build();
+        let block2 = builder.nonce(1.pack()).build();
         node.submit_block(&block1);
         node.submit_block(&block2);
 
         let builder = node.new_block_builder(None, None, None);
         let block = builder
-            .clone()
             .set_uncles(vec![block2.as_uncle()])
             .nonce(0.pack())
             .build();
@@ -49,9 +47,9 @@ impl Spec for MissingUncleRequest {
         });
 
         net.send(
-            NetworkProtocol::RELAY.into(),
+            SupportProtocols::Relay.protocol_id(),
             peer_id,
-            message.as_slice().into(),
+            message.as_bytes(),
         );
 
         net.should_receive(
@@ -60,7 +58,7 @@ impl Spec for MissingUncleRequest {
                     .map(|message| message.to_enum().item_name() == packed::BlockTransactions::NAME)
                     .unwrap_or(false)
             },
-            "Node should reponse BlockTransactions message",
+            "Node should response BlockTransactions message",
         );
 
         if let packed::RelayMessageUnionReader::BlockTransactions(reader) =

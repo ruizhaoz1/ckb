@@ -22,7 +22,7 @@ fn test_add_addr() {
     let peer_id = PeerId::random();
     assert_eq!(peer_store.fetch_addrs_to_attempt(2).len(), 0);
     peer_store
-        .add_addr(peer_id.clone(), "/ip4/127.0.0.1/tcp/42".parse().unwrap())
+        .add_addr(peer_id, "/ip4/127.0.0.1/tcp/42".parse().unwrap())
         .unwrap();
     assert_eq!(peer_store.fetch_addrs_to_attempt(2).len(), 1);
     // we have not connected yet, so return 0
@@ -95,7 +95,7 @@ fn test_fetch_addrs_to_attempt_in_last_minutes() {
     let mut peer_store: PeerStore = Default::default();
     let peer_id = PeerId::random();
     let addr = "/ip4/127.0.0.1/tcp/42".parse::<Multiaddr>().unwrap();
-    peer_store.add_addr(peer_id, addr.clone()).unwrap();
+    peer_store.add_addr(peer_id, addr).unwrap();
     let paddr = peer_store.fetch_addrs_to_attempt(1).remove(0);
     let now = faketime::unix_time_as_millis();
 
@@ -123,7 +123,7 @@ fn test_fetch_addrs_to_feeler() {
 
     // ignores connected peers' addrs
     peer_store
-        .add_connected_peer(peer_id.clone(), addr.clone(), SessionType::Outbound)
+        .add_connected_peer(peer_id.clone(), addr, SessionType::Outbound)
         .unwrap();
     assert!(peer_store.fetch_addrs_to_feeler(1).is_empty());
 
@@ -140,8 +140,9 @@ fn test_fetch_random_addrs() {
     let peer_id = PeerId::random();
     let addr2 = "/ip4/225.0.0.2/tcp/42".parse::<Multiaddr>().unwrap();
     let peer_id2 = PeerId::random();
+    let addr3 = "/ip4/225.0.0.3/tcp/42".parse::<Multiaddr>().unwrap();
+    let peer_id3 = PeerId::random();
     let duplicated_addr = "/ip4/225.0.0.1/tcp/41".parse::<Multiaddr>().unwrap();
-    peer_store.add_addr(peer_id.clone(), addr.clone()).unwrap();
     // random should not return peer that we have never connected to
     assert!(peer_store.fetch_random_addrs(1).is_empty());
     // can't get peer addr from inbound
@@ -165,6 +166,24 @@ fn test_fetch_random_addrs() {
         .unwrap();
     assert_eq!(peer_store.fetch_random_addrs(2).len(), 2);
     assert_eq!(peer_store.fetch_random_addrs(1).len(), 1);
+
+    // return old peer's addr
+    peer_store
+        .add_addr(peer_id3.clone(), addr3.clone())
+        .unwrap();
+    peer_store
+        .add_connected_peer(peer_id3.clone(), addr3.clone(), SessionType::Outbound)
+        .unwrap();
+    // set last_connected_at_ms to an expired timestamp
+    // should still return peer's addr
+    peer_store
+        .mut_addr_manager()
+        .get_mut(&addr3.extract_ip_addr().unwrap())
+        .unwrap()
+        .last_connected_at_ms = 0;
+    assert_eq!(peer_store.fetch_random_addrs(3).len(), 3);
+    peer_store.remove_disconnected_peer(&peer_id3);
+    assert_eq!(peer_store.fetch_random_addrs(3).len(), 2);
 }
 
 #[test]
@@ -193,7 +212,7 @@ fn test_trim_p2p_phase() {
     peer_store.add_addr(peer_id, addr).unwrap();
     let addr = peer_store.fetch_addrs_to_attempt(1).remove(0);
     let has_p2p_phase = addr.addr.into_iter().find(|proto| match proto {
-        multiaddr::Protocol::P2p(_) => true,
+        multiaddr::Protocol::P2P(_) => true,
         _ => false,
     });
     assert!(has_p2p_phase.is_none());

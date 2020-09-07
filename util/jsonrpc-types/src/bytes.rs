@@ -109,8 +109,7 @@ impl<'de> serde::Deserialize<'de> for JsonBytes {
 mod test {
     use super::JsonBytes;
     use regex::Regex;
-    use serde_derive::{Deserialize, Serialize};
-    use serde_json;
+    use serde::{Deserialize, Serialize};
 
     #[test]
     fn test_de_error() {

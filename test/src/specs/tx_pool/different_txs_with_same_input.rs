@@ -18,7 +18,7 @@ impl Spec for DifferentTxsWithSameInput {
         let tx_hash_0 = node0.generate_transaction();
         info!("Generate 2 txs with same input");
         let tx1 = node0.new_transaction(tx_hash_0.clone());
-        let tx2_temp = node0.new_transaction(tx_hash_0.clone());
+        let tx2_temp = node0.new_transaction(tx_hash_0);
         // Set tx2 fee to a higher value, tx1 capacity is 100, set tx2 capacity to 80 for +20 fee.
         let output = CellOutputBuilder::default()
             .capacity(capacity_bytes!(80).pack())
@@ -28,12 +28,8 @@ impl Spec for DifferentTxsWithSameInput {
             .as_advanced_builder()
             .set_outputs(vec![output])
             .build();
-        node0
-            .rpc_client()
-            .send_transaction(tx1.clone().data().into());
-        node0
-            .rpc_client()
-            .send_transaction(tx2.clone().data().into());
+        node0.rpc_client().send_transaction(tx1.data().into());
+        node0.rpc_client().send_transaction(tx2.data().into());
 
         node0.generate_block();
         node0.generate_block();

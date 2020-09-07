@@ -1,6 +1,6 @@
 [package]
 name = "ckb-error"
-version = "0.25.2-pre"
+version = "0.36.0-pre"
 license = "MIT"
 authors = ["Nervos Core Dev <dev@nervos.org>"]
 edition = "2018"
@@ -11,3 +11,4 @@ edition = "2018"
 failure = "0.1.5"
 ckb-occupied-capacity = { path = "../util/occupied-capacity" }
 enum-display-derive = "0.1.0"
+quote = "1.0.3"

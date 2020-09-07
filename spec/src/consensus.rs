@@ -1,7 +1,8 @@
 #![allow(clippy::inconsistent_digit_grouping)]
 
 use crate::{
-    calculate_block_reward, OUTPUT_INDEX_DAO, OUTPUT_INDEX_SECP256K1_BLAKE160_SIGHASH_ALL,
+    calculate_block_reward, OUTPUT_INDEX_DAO, OUTPUT_INDEX_SECP256K1_BLAKE160_MULTISIG_ALL,
+    OUTPUT_INDEX_SECP256K1_BLAKE160_SIGHASH_ALL,
 };
 use ckb_dao_utils::genesis_dao_data_with_satoshi_gift;
 use ckb_pow::{Pow, PowEngine};
@@ -64,7 +65,7 @@ const MIN_EPOCH_LENGTH: u64 = DEFAULT_EPOCH_DURATION_TARGET / MAX_BLOCK_INTERVAL
 pub(crate) const DEFAULT_PRIMARY_EPOCH_REWARD_HALVING_INTERVAL: EpochNumber =
     4 * 365 * 24 * 60 * 60 / DEFAULT_EPOCH_DURATION_TARGET; // every 4 years
 
-const MAX_BLOCK_BYTES: u64 = TWO_IN_TWO_OUT_BYTES * TWO_IN_TWO_OUT_COUNT;
+pub const MAX_BLOCK_BYTES: u64 = TWO_IN_TWO_OUT_BYTES * TWO_IN_TWO_OUT_COUNT;
 pub(crate) const MAX_BLOCK_CYCLES: u64 = TWO_IN_TWO_OUT_CYCLES * TWO_IN_TWO_OUT_COUNT;
 // 1.5 * TWO_IN_TWO_OUT_COUNT
 const MAX_BLOCK_PROPOSALS_LIMIT: u64 = 1_500;
@@ -231,7 +232,8 @@ impl ConsensusBuilder {
                 max_block_cycles: MAX_BLOCK_CYCLES,
                 max_block_bytes: MAX_BLOCK_BYTES,
                 dao_type_hash: None,
-                secp_blake160_type_hash: None,
+                secp256k1_blake160_sighash_all_type_hash: None,
+                secp256k1_blake160_multisig_all_type_hash: None,
                 genesis_epoch_ext,
                 block_version: BLOCK_VERSION,
                 tx_version: TX_VERSION,
@@ -295,8 +297,10 @@ impl ConsensusBuilder {
         );
 
         self.inner.dao_type_hash = self.get_type_hash(OUTPUT_INDEX_DAO);
-        self.inner.secp_blake160_type_hash =
+        self.inner.secp256k1_blake160_sighash_all_type_hash =
             self.get_type_hash(OUTPUT_INDEX_SECP256K1_BLAKE160_SIGHASH_ALL);
+        self.inner.secp256k1_blake160_multisig_all_type_hash =
+            self.get_type_hash(OUTPUT_INDEX_SECP256K1_BLAKE160_MULTISIG_ALL);
         self.inner
             .genesis_epoch_ext
             .set_compact_target(self.inner.genesis_block.compact_target());
@@ -329,6 +333,12 @@ impl ConsensusBuilder {
     #[must_use]
     pub fn max_block_cycles(mut self, max_block_cycles: Cycle) -> Self {
         self.inner.max_block_cycles = max_block_cycles;
+        self
+    }
+
+    #[must_use]
+    pub fn max_block_bytes(mut self, max_block_bytes: u64) -> Self {
+        self.inner.max_block_bytes = max_block_bytes;
         self
     }
 
@@ -382,7 +392,8 @@ pub struct Consensus {
     pub genesis_block: BlockView,
     pub genesis_hash: Byte32,
     pub dao_type_hash: Option<Byte32>,
-    pub secp_blake160_type_hash: Option<Byte32>,
+    pub secp256k1_blake160_sighash_all_type_hash: Option<Byte32>,
+    pub secp256k1_blake160_multisig_all_type_hash: Option<Byte32>,
     pub initial_primary_epoch_reward: Capacity,
     pub secondary_epoch_reward: Capacity,
     pub max_uncles_num: usize,
@@ -459,8 +470,11 @@ impl Consensus {
     pub fn dao_type_hash(&self) -> Option<Byte32> {
         self.dao_type_hash.clone()
     }
-    pub fn secp_blake160_type_hash(&self) -> Option<Byte32> {
-        self.secp_blake160_type_hash.clone()
+    pub fn secp256k1_blake160_sighash_all_type_hash(&self) -> Option<Byte32> {
+        self.secp256k1_blake160_sighash_all_type_hash.clone()
+    }
+    pub fn secp256k1_blake160_multisig_all_type_hash(&self) -> Option<Byte32> {
+        self.secp256k1_blake160_multisig_all_type_hash.clone()
     }
 
     pub fn max_uncles_num(&self) -> usize {
@@ -812,7 +826,7 @@ pub mod test {
             .build();
         let genesis_epoch = consensus.genesis_epoch_ext();
 
-        let get_block_header = |_hash: &Byte32| Some(genesis.header().clone());
+        let get_block_header = |_hash: &Byte32| Some(genesis.header());
         let total_uncles_count = |_hash: &Byte32| Some(0);
         let header = |number: u64| HeaderBuilder::default().number(number.pack()).build();
 

@@ -2,15 +2,24 @@ use crate::{
     bytes::Bytes,
     core::error::OutPointError,
     core::{BlockView, Capacity, DepType, TransactionInfo, TransactionView},
-    packed::{Byte32, CellOutput, OutPoint, OutPointVec},
+    packed::{Byte32, CellDep, CellOutput, OutPoint, OutPointVec},
     prelude::*,
 };
 use ckb_error::Error;
 use ckb_occupied_capacity::Result as CapacityResult;
+use once_cell::sync::OnceCell;
 use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::fmt;
 use std::hash::BuildHasher;
+
+#[derive(Debug)]
+pub enum ResolvedDep {
+    Cell(CellMeta),
+    Group((CellMeta, Vec<CellMeta>)),
+}
+
+pub static SYSTEM_CELL: OnceCell<HashMap<CellDep, ResolvedDep>> = OnceCell::new();
 
 #[derive(Clone, Eq, PartialEq, Default)]
 pub struct CellMeta {
@@ -125,7 +134,7 @@ impl CellMeta {
 #[derive(PartialEq, Debug)]
 pub enum CellStatus {
     /// Cell exists and has not been spent.
-    Live(Box<CellMeta>),
+    Live(CellMeta),
     /// Cell exists and has been spent.
     Dead,
     /// Cell does not exist.
@@ -134,7 +143,7 @@ pub enum CellStatus {
 
 impl CellStatus {
     pub fn live_cell(cell_meta: CellMeta) -> CellStatus {
-        CellStatus::Live(Box::new(cell_meta))
+        CellStatus::Live(cell_meta)
     }
 
     pub fn is_live(&self) -> bool {
@@ -160,6 +169,33 @@ pub struct ResolvedTransaction {
     pub resolved_cell_deps: Vec<CellMeta>,
     pub resolved_inputs: Vec<CellMeta>,
     pub resolved_dep_groups: Vec<CellMeta>,
+}
+
+impl ResolvedTransaction {
+    // cellbase will be resolved with empty input cells, we can use low cost check here:
+    pub fn is_cellbase(&self) -> bool {
+        self.resolved_inputs.is_empty()
+    }
+
+    pub fn inputs_capacity(&self) -> CapacityResult<Capacity> {
+        self.resolved_inputs
+            .iter()
+            .map(CellMeta::capacity)
+            .try_fold(Capacity::zero(), Capacity::safe_add)
+    }
+
+    pub fn outputs_capacity(&self) -> CapacityResult<Capacity> {
+        self.transaction.outputs_capacity()
+    }
+
+    pub fn related_dep_out_points(&self) -> Vec<OutPoint> {
+        self.resolved_cell_deps
+            .iter()
+            .map(|d| &d.out_point)
+            .chain(self.resolved_dep_groups.iter().map(|d| &d.out_point))
+            .cloned()
+            .collect()
+    }
 }
 
 pub trait CellProvider {
@@ -288,7 +324,7 @@ impl<'a> TransactionsProvider<'a> {
 }
 
 impl<'a> CellProvider for TransactionsProvider<'a> {
-    fn cell(&self, out_point: &OutPoint, _with_data: bool) -> CellStatus {
+    fn cell(&self, out_point: &OutPoint, with_data: bool) -> CellStatus {
         match self.transactions.get(&out_point.tx_hash()) {
             Some(tx) => tx
                 .outputs()
@@ -299,7 +335,11 @@ impl<'a> CellProvider for TransactionsProvider<'a> {
                         .get(out_point.index().unpack())
                         .expect("output data")
                         .raw_data();
-                    CellStatus::live_cell(CellMetaBuilder::from_cell_output(cell, data).build())
+                    let mut cell_meta = CellMetaBuilder::from_cell_output(cell, data).build();
+                    if !with_data {
+                        cell_meta.mem_cell_data = None;
+                    }
+                    CellStatus::live_cell(cell_meta)
                 })
                 .unwrap_or(CellStatus::Unknown),
             None => CellStatus::Unknown,
@@ -328,7 +368,7 @@ pub fn get_related_dep_out_points<F: Fn(&OutPoint) -> Option<Bytes>>(
                     parse_dep_group_data(&data).map_err(|err| format!("Invalid data: {}", err))?;
                 out_points.extend(sub_out_points.into_iter());
             }
-            out_points.push(out_point.clone());
+            out_points.push(out_point);
             Ok(out_points)
         },
     )
@@ -351,7 +391,7 @@ fn parse_dep_group_data(slice: &[u8]) -> Result<OutPointVec, String> {
     }
 }
 
-fn resolve_dep_group<F: FnMut(&OutPoint, bool) -> Result<Option<Box<CellMeta>>, Error>>(
+fn resolve_dep_group<F: FnMut(&OutPoint, bool) -> Result<Option<CellMeta>, Error>>(
     out_point: &OutPoint,
     mut cell_resolver: F,
 ) -> Result<Option<(CellMeta, Vec<CellMeta>)>, Error> {
@@ -370,10 +410,10 @@ fn resolve_dep_group<F: FnMut(&OutPoint, bool) -> Result<Option<Box<CellMeta>>, 
     let mut resolved_deps = Vec::with_capacity(sub_out_points.len());
     for sub_out_point in sub_out_points.into_iter() {
         if let Some(sub_cell_meta) = cell_resolver(&sub_out_point, true)? {
-            resolved_deps.push(*sub_cell_meta);
+            resolved_deps.push(sub_cell_meta);
         }
     }
-    Ok(Some((*dep_group_cell, resolved_deps)))
+    Ok(Some((dep_group_cell, resolved_deps)))
 }
 
 pub fn resolve_transaction<CP: CellProvider, HC: HeaderChecker, S: BuildHasher>(
@@ -396,7 +436,7 @@ pub fn resolve_transaction<CP: CellProvider, HC: HeaderChecker, S: BuildHasher>(
     let mut current_inputs = HashSet::new();
 
     let mut resolve_cell =
-        |out_point: &OutPoint, with_data: bool| -> Result<Option<Box<CellMeta>>, Error> {
+        |out_point: &OutPoint, with_data: bool| -> Result<Option<CellMeta>, Error> {
             if seen_inputs.contains(out_point) {
                 return Err(OutPointError::Dead(out_point.clone()).into());
             }
@@ -416,26 +456,20 @@ pub fn resolve_transaction<CP: CellProvider, HC: HeaderChecker, S: BuildHasher>(
     if !transaction.is_cellbase() {
         for out_point in transaction.input_pts_iter() {
             if !current_inputs.insert(out_point.to_owned()) {
-                return Err(OutPointError::Dead(out_point.clone()).into());
+                return Err(OutPointError::Dead(out_point).into());
             }
             if let Some(cell_meta) = resolve_cell(&out_point, false)? {
-                resolved_inputs.push(*cell_meta);
+                resolved_inputs.push(cell_meta);
             }
         }
     }
 
-    for cell_dep in transaction.cell_deps_iter() {
-        if cell_dep.dep_type() == DepType::DepGroup.into() {
-            if let Some((dep_group, cell_deps)) =
-                resolve_dep_group(&cell_dep.out_point(), &mut resolve_cell)?
-            {
-                resolved_dep_groups.push(dep_group);
-                resolved_cell_deps.extend(cell_deps);
-            }
-        } else if let Some(cell_meta) = resolve_cell(&cell_dep.out_point(), true)? {
-            resolved_cell_deps.push(*cell_meta);
-        }
-    }
+    resolve_transaction_deps_with_system_cell_cache(
+        &transaction,
+        &mut resolve_cell,
+        &mut resolved_cell_deps,
+        &mut resolved_dep_groups,
+    )?;
 
     for block_hash in transaction.header_deps_iter() {
         header_checker.check_valid(&block_hash)?;
@@ -454,31 +488,144 @@ pub fn resolve_transaction<CP: CellProvider, HC: HeaderChecker, S: BuildHasher>(
     }
 }
 
-impl ResolvedTransaction {
-    // cellbase will be resolved with empty input cells, we can use low cost check here:
-    pub fn is_cellbase(&self) -> bool {
-        self.resolved_inputs.is_empty()
+fn resolve_transaction_deps_with_system_cell_cache<
+    F: FnMut(&OutPoint, bool) -> Result<Option<CellMeta>, Error>,
+>(
+    transaction: &TransactionView,
+    cell_resolver: &mut F,
+    resolved_cell_deps: &mut Vec<CellMeta>,
+    resolved_dep_groups: &mut Vec<CellMeta>,
+) -> Result<(), Error> {
+    if let Some(system_cell) = SYSTEM_CELL.get() {
+        for cell_dep in transaction.cell_deps_iter() {
+            if let Some(resolved_dep) = system_cell.get(&cell_dep) {
+                match resolved_dep {
+                    ResolvedDep::Cell(cell_meta) => resolved_cell_deps.push(cell_meta.clone()),
+                    ResolvedDep::Group(group) => {
+                        let (dep_group, cell_deps) = group;
+                        resolved_dep_groups.push(dep_group.clone());
+                        resolved_cell_deps.extend(cell_deps.clone());
+                    }
+                }
+            } else {
+                resolve_transaction_dep(
+                    &cell_dep,
+                    cell_resolver,
+                    resolved_cell_deps,
+                    resolved_dep_groups,
+                )?;
+            }
+        }
+    } else {
+        for cell_dep in transaction.cell_deps_iter() {
+            resolve_transaction_dep(
+                &cell_dep,
+                cell_resolver,
+                resolved_cell_deps,
+                resolved_dep_groups,
+            )?;
+        }
     }
+    Ok(())
+}
 
-    pub fn inputs_capacity(&self) -> CapacityResult<Capacity> {
-        self.resolved_inputs
-            .iter()
-            .map(CellMeta::capacity)
-            .try_fold(Capacity::zero(), Capacity::safe_add)
+fn resolve_transaction_dep<F: FnMut(&OutPoint, bool) -> Result<Option<CellMeta>, Error>>(
+    cell_dep: &CellDep,
+    cell_resolver: &mut F,
+    resolved_cell_deps: &mut Vec<CellMeta>,
+    resolved_dep_groups: &mut Vec<CellMeta>,
+) -> Result<(), Error> {
+    if cell_dep.dep_type() == DepType::DepGroup.into() {
+        if let Some((dep_group, cell_deps)) =
+            resolve_dep_group(&cell_dep.out_point(), cell_resolver)?
+        {
+            resolved_dep_groups.push(dep_group);
+            resolved_cell_deps.extend(cell_deps);
+        }
+    } else if let Some(cell_meta) = cell_resolver(&cell_dep.out_point(), true)? {
+        resolved_cell_deps.push(cell_meta);
     }
+    Ok(())
+}
 
-    pub fn outputs_capacity(&self) -> CapacityResult<Capacity> {
-        self.transaction.outputs_capacity()
+fn build_cell_meta_from_out_point<CP: CellProvider>(
+    cell_provider: &CP,
+    out_point: &OutPoint,
+    with_data: bool,
+) -> Result<Option<CellMeta>, Error> {
+    let cell_status = cell_provider.cell(out_point, with_data);
+    match cell_status {
+        CellStatus::Dead => Err(OutPointError::Dead(out_point.clone()).into()),
+        CellStatus::Unknown => Ok(None),
+        CellStatus::Live(cell_meta) => Ok(Some(cell_meta)),
     }
+}
 
-    pub fn related_dep_out_points(&self) -> Vec<OutPoint> {
-        self.resolved_cell_deps
-            .iter()
-            .map(|d| &d.out_point)
-            .chain(self.resolved_dep_groups.iter().map(|d| &d.out_point))
-            .cloned()
-            .collect()
-    }
+pub fn setup_system_cell_cache<CP: CellProvider>(genesis: &BlockView, cell_provider: &CP) {
+    let system_cell_transaction = &genesis.transactions()[0];
+    let secp_cell_transaction = &genesis.transactions()[1];
+    let secp_code_dep = CellDep::new_builder()
+        .out_point(OutPoint::new(system_cell_transaction.hash(), 1))
+        .dep_type(DepType::Code.into())
+        .build();
+
+    let dao_dep = CellDep::new_builder()
+        .out_point(OutPoint::new(system_cell_transaction.hash(), 2))
+        .dep_type(DepType::Code.into())
+        .build();
+
+    let secp_data_dep = CellDep::new_builder()
+        .out_point(OutPoint::new(system_cell_transaction.hash(), 3))
+        .dep_type(DepType::Code.into())
+        .build();
+
+    let secp_group_dep = CellDep::new_builder()
+        .out_point(OutPoint::new(secp_cell_transaction.hash(), 0))
+        .dep_type(DepType::DepGroup.into())
+        .build();
+
+    let multi_sign_secp_group = CellDep::new_builder()
+        .out_point(OutPoint::new(secp_cell_transaction.hash(), 1))
+        .dep_type(DepType::DepGroup.into())
+        .build();
+
+    let mut cell_deps = HashMap::new();
+    let secp_code_dep_cell =
+        build_cell_meta_from_out_point(cell_provider, &secp_code_dep.out_point(), true)
+            .expect("resolve secp_code_dep_cell")
+            .expect("resolve secp_code_dep_cell");
+    cell_deps.insert(secp_code_dep, ResolvedDep::Cell(secp_code_dep_cell));
+
+    let dao_dep_cell = build_cell_meta_from_out_point(cell_provider, &dao_dep.out_point(), true)
+        .expect("resolve dao_dep_cell")
+        .expect("resolve dao_dep_cell");
+    cell_deps.insert(dao_dep, ResolvedDep::Cell(dao_dep_cell));
+
+    let secp_data_dep_cell =
+        build_cell_meta_from_out_point(cell_provider, &secp_data_dep.out_point(), true)
+            .expect("resolve secp_data_dep_cell")
+            .expect("resolve secp_data_dep_cell");
+    cell_deps.insert(secp_data_dep, ResolvedDep::Cell(secp_data_dep_cell));
+
+    let resolve_cell = |out_point: &OutPoint, with_data: bool| -> Result<Option<CellMeta>, Error> {
+        build_cell_meta_from_out_point(cell_provider, out_point, with_data)
+    };
+
+    let secp_group_dep_cell = resolve_dep_group(&secp_group_dep.out_point(), resolve_cell)
+        .expect("resolve secp_group_dep_cell")
+        .expect("resolve secp_group_dep_cell");
+    cell_deps.insert(secp_group_dep, ResolvedDep::Group(secp_group_dep_cell));
+
+    let multi_sign_secp_group_cell =
+        resolve_dep_group(&multi_sign_secp_group.out_point(), resolve_cell)
+            .expect("resolve multi_sign_secp_group")
+            .expect("resolve multi_sign_secp_group");
+    cell_deps.insert(
+        multi_sign_secp_group,
+        ResolvedDep::Group(multi_sign_secp_group_cell),
+    );
+
+    SYSTEM_CELL.set(cell_deps).expect("SYSTEM_CELL init once");
 }
 
 #[cfg(test)]
@@ -581,7 +728,7 @@ mod tests {
         db.cells.insert(p1.clone(), Some(o.clone()));
         db.cells.insert(p2.clone(), None);
 
-        assert_eq!(CellStatus::Live(Box::new(o)), db.cell(&p1, false));
+        assert_eq!(CellStatus::Live(o), db.cell(&p1, false));
         assert_eq!(CellStatus::Dead, db.cell(&p2, false));
         assert_eq!(CellStatus::Unknown, db.cell(&p3, false));
     }
@@ -673,7 +820,7 @@ mod tests {
             .insert(op_dep.clone(), Some(dep_group_cell));
 
         let dep = CellDep::new_builder()
-            .out_point(op_dep.clone())
+            .out_point(op_dep)
             .dep_type(DepType::DepGroup.into())
             .build();
 
@@ -729,7 +876,7 @@ mod tests {
         header_checker.push_attached(main_chain_block_hash.clone());
 
         let transaction = TransactionBuilder::default()
-            .header_dep(main_chain_block_hash.clone())
+            .header_dep(main_chain_block_hash)
             .header_dep(invalid_block_hash.clone())
             .build();
 
@@ -752,7 +899,7 @@ mod tests {
         let out_point = OutPoint::new(h256!("0x2").pack(), 3);
 
         let tx1 = TransactionBuilder::default()
-            .input(CellInput::new(out_point.clone(), 0))
+            .input(CellInput::new(out_point, 0))
             .output(
                 CellOutput::new_builder()
                     .capacity(capacity_bytes!(2).pack())
@@ -781,7 +928,7 @@ mod tests {
         // tx1 -> tx2
         // resolve err
         {
-            let block = generate_block(vec![tx2.clone(), tx1.clone()]);
+            let block = generate_block(vec![tx2, tx1.clone()]);
             let provider = BlockCellProvider::new(&block);
 
             assert_error_eq!(
@@ -802,7 +949,7 @@ mod tests {
         // tx1 -> tx3
         // resolve err
         {
-            let block = generate_block(vec![tx3.clone(), tx1.clone()]);
+            let block = generate_block(vec![tx3, tx1.clone()]);
             let provider = BlockCellProvider::new(&block);
 
             assert_error_eq!(
@@ -826,7 +973,7 @@ mod tests {
 
         let dep = CellDep::new_builder().out_point(out_point.clone()).build();
         let tx = TransactionBuilder::default()
-            .input(CellInput::new(out_point.clone(), 0))
+            .input(CellInput::new(out_point, 0))
             .cell_dep(dep)
             .build();
 
@@ -888,7 +1035,7 @@ mod tests {
             let result2 =
                 resolve_transaction(tx2, &mut seen_inputs, &cell_provider, &header_checker);
 
-            assert_error_eq!(result2.unwrap_err(), OutPointError::Dead(out_point.clone()));
+            assert_error_eq!(result2.unwrap_err(), OutPointError::Dead(out_point));
         }
     }
 }

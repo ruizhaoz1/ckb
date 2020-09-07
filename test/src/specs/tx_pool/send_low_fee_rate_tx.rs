@@ -1,7 +1,7 @@
 use crate::utils::wait_until;
 use crate::{Net, Spec, DEFAULT_TX_PROPOSAL_WINDOW};
 use ckb_app_config::CKBAppConfig;
-use ckb_tx_pool::FeeRate;
+use ckb_fee_estimator::FeeRate;
 use ckb_types::{core::TransactionView, packed, prelude::*};
 use log::info;
 
@@ -55,7 +55,7 @@ impl Spec for SendLowFeeRateTx {
         assert!(ret.is_err());
 
         info!("Generate normal fee rate tx");
-        let tx_high_fee = node0.new_transaction(tx_hash_0.clone());
+        let tx_high_fee = node0.new_transaction(tx_hash_0);
         let output = tx_high_fee
             .outputs()
             .get(0)
@@ -74,7 +74,7 @@ impl Spec for SendLowFeeRateTx {
             .send_transaction(tx_high_fee.data().into());
     }
 
-    fn modify_ckb_config(&self) -> Box<dyn Fn(&mut CKBAppConfig) -> ()> {
+    fn modify_ckb_config(&self) -> Box<dyn Fn(&mut CKBAppConfig)> {
         Box::new(|config| {
             config.tx_pool.min_fee_rate = FeeRate::from_u64(1_000);
         })

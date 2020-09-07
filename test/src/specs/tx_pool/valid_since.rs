@@ -25,7 +25,7 @@ impl Spec for ValidSince {
         // self.test_since_and_proposal(&net.nodes[1]);
     }
 
-    fn modify_chain_spec(&self) -> Box<dyn Fn(&mut ChainSpec) -> ()> {
+    fn modify_chain_spec(&self) -> Box<dyn Fn(&mut ChainSpec)> {
         Box::new(move |spec_config: &mut ChainSpec| {
             spec_config.params.cellbase_maturity = 0;
         })
@@ -44,15 +44,14 @@ impl ValidSince {
 
         // Failed to send transaction since SinceImmaturity
         for _ in 1..relative {
-            assert_send_transaction_fail(node, &transaction, "Transaction: Immature");
+            assert_send_transaction_fail(node, &transaction, "TransactionFailedToVerify: Immature");
             node.generate_block();
         }
 
         // Success to send transaction after cellbase immaturity and since immaturity
         assert!(
             node.rpc_client()
-                .inner()
-                .send_transaction(transaction.data().into())
+                .send_transaction_result(transaction.data().into())
                 .is_ok(),
             "transaction is ok, tip is equal to relative since block number",
         );
@@ -70,15 +69,14 @@ impl ValidSince {
         // Failed to send transaction since SinceImmaturity
         let tip_number = node.rpc_client().get_tip_block_number();
         for _ in tip_number + 1..absolute {
-            assert_send_transaction_fail(node, &transaction, "Transaction: Immature");
+            assert_send_transaction_fail(node, &transaction, "TransactionFailedToVerify: Immature");
             node.generate_block();
         }
 
         // Success to send transaction after cellbase immaturity and since immaturity
         assert!(
             node.rpc_client()
-                .inner()
-                .send_transaction(transaction.data().into())
+                .send_transaction_result(transaction.data().into())
                 .is_ok(),
             "transaction is ok, tip is equal to absolute since block number",
         );
@@ -115,15 +113,14 @@ impl ValidSince {
         {
             let since = since_from_relative_timestamp(median_time_seconds + 1);
             let transaction = node.new_transaction_with_since(cellbase.hash(), since);
-            assert_send_transaction_fail(node, &transaction, "Transaction: Immature");
+            assert_send_transaction_fail(node, &transaction, "TransactionFailedToVerify: Immature");
         }
         {
             let since = since_from_relative_timestamp(median_time_seconds - 1);
             let transaction = node.new_transaction_with_since(cellbase.hash(), since);
             assert!(
                 node.rpc_client()
-                    .inner()
-                    .send_transaction(transaction.data().into())
+                    .send_transaction_result(transaction.data().into())
                     .is_ok(),
                 "transaction's since is greater than tip's median time",
             );
@@ -158,15 +155,14 @@ impl ValidSince {
         {
             let since = since_from_absolute_timestamp(median_time_seconds + 1);
             let transaction = node.new_transaction_with_since(cellbase.hash(), since);
-            assert_send_transaction_fail(node, &transaction, "Transaction: Immature");
+            assert_send_transaction_fail(node, &transaction, "TransactionFailedToVerify: Immature");
         }
         {
             let since = since_from_absolute_timestamp(median_time_seconds - 1);
             let transaction = node.new_transaction_with_since(cellbase.hash(), since);
             assert!(
                 node.rpc_client()
-                    .inner()
-                    .send_transaction(transaction.data().into())
+                    .send_transaction_result(transaction.data().into())
                     .is_ok(),
                 "transaction's since is greater than tip's median time",
             );
@@ -186,7 +182,7 @@ impl ValidSince {
 
         (0..relative_blocks - DEFAULT_TX_PROPOSAL_WINDOW.0).for_each(|i| {
             info!("Tx is Immature in block N + {}", i);
-            assert_send_transaction_fail(node, &tx, "Transaction: Immature");
+            assert_send_transaction_fail(node, &tx, "TransactionFailedToVerify: Immature");
             node.generate_block();
         });
 
@@ -194,7 +190,7 @@ impl ValidSince {
             "Tx will be added to pending pool in N + {} block",
             relative_blocks - DEFAULT_TX_PROPOSAL_WINDOW.0
         );
-        let tx_hash = node.rpc_client().send_transaction(tx.clone().data().into());
+        let tx_hash = node.rpc_client().send_transaction(tx.data().into());
         assert_eq!(tx_hash, tx.hash());
         node.assert_tx_pool_size(1, 0);
 
@@ -231,7 +227,7 @@ impl ValidSince {
             "Tx will be added to pending pool in {} block",
             absolute_block - DEFAULT_TX_PROPOSAL_WINDOW.0
         );
-        let tx_hash = node.rpc_client().send_transaction(tx.clone().data().into());
+        let tx_hash = node.rpc_client().send_transaction(tx.data().into());
         assert_eq!(tx_hash, tx.hash());
         node.assert_tx_pool_size(1, 0);
 

@@ -31,7 +31,7 @@ use ckb_types::{
     prelude::*,
     H160, H256, U128,
 };
-use serde_derive::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::error::Error;
@@ -65,7 +65,7 @@ pub mod default_params {
     use crate::consensus::{
         CELLBASE_MATURITY, DEFAULT_EPOCH_DURATION_TARGET,
         DEFAULT_PRIMARY_EPOCH_REWARD_HALVING_INTERVAL, DEFAULT_SECONDARY_EPOCH_REWARD,
-        GENESIS_EPOCH_LENGTH, INITIAL_PRIMARY_EPOCH_REWARD, MAX_BLOCK_CYCLES,
+        GENESIS_EPOCH_LENGTH, INITIAL_PRIMARY_EPOCH_REWARD, MAX_BLOCK_BYTES, MAX_BLOCK_CYCLES,
     };
     use ckb_types::core::{Capacity, Cycle, EpochNumber};
 
@@ -79,6 +79,10 @@ pub mod default_params {
 
     pub fn max_block_cycles() -> Cycle {
         MAX_BLOCK_CYCLES
+    }
+
+    pub fn max_block_bytes() -> u64 {
+        MAX_BLOCK_BYTES
     }
 
     pub fn cellbase_maturity() -> u64 {
@@ -106,6 +110,8 @@ pub struct Params {
     pub secondary_epoch_reward: Capacity,
     #[serde(default = "default_params::max_block_cycles")]
     pub max_block_cycles: Cycle,
+    #[serde(default = "default_params::max_block_bytes")]
+    pub max_block_bytes: u64,
     #[serde(default = "default_params::cellbase_maturity")]
     pub cellbase_maturity: u64,
     #[serde(default = "default_params::primary_epoch_reward_halving_interval")]
@@ -124,6 +130,7 @@ impl Default for Params {
             initial_primary_epoch_reward: default_params::initial_primary_epoch_reward(),
             secondary_epoch_reward: default_params::secondary_epoch_reward(),
             max_block_cycles: default_params::max_block_cycles(),
+            max_block_bytes: default_params::max_block_bytes(),
             cellbase_maturity: default_params::cellbase_maturity(),
             primary_epoch_reward_halving_interval:
                 default_params::primary_epoch_reward_halving_interval(),
@@ -274,6 +281,7 @@ impl ChainSpec {
             ))
             .secondary_epoch_reward(self.params.secondary_epoch_reward)
             .max_block_cycles(self.params.max_block_cycles)
+            .max_block_bytes(self.params.max_block_bytes)
             .pow(self.pow.clone())
             .satoshi_pubkey_hash(self.genesis.satoshi_gift.satoshi_pubkey_hash.clone())
             .satoshi_cell_occupied_ratio(self.genesis.satoshi_gift.satoshi_cell_occupied_ratio)
@@ -547,7 +555,7 @@ impl ChainSpec {
                     })
                     .collect::<Result<_, Box<dyn Error>>>()?;
 
-                let data = Bytes::from(out_points.pack().as_slice());
+                let data = out_points.pack().as_bytes();
                 let cell = packed::CellOutput::new_builder()
                     .lock(self.genesis.system_cells_lock.clone().into())
                     .build_exact_capacity(Capacity::bytes(data.len())?)?;
@@ -577,10 +585,10 @@ impl ChainSpec {
         .ok_or_else(|| String::from("Get secp blake160 out point failed"))?;
         let cell_deps = vec![
             packed::CellDep::new_builder()
-                .out_point(secp_data_out_point.clone())
+                .out_point(secp_data_out_point)
                 .build(),
             packed::CellDep::new_builder()
-                .out_point(secp_blake160_out_point.clone())
+                .out_point(secp_blake160_out_point)
                 .build(),
         ];
         let tx = TransactionBuilder::default()
@@ -607,7 +615,7 @@ impl ChainSpec {
 
 impl GenesisCell {
     fn build_output(&self) -> Result<(packed::CellOutput, Bytes), Box<dyn Error>> {
-        let data: Bytes = self.message.as_bytes().into();
+        let data: Bytes = self.message.as_bytes().to_owned().into();
         let cell = packed::CellOutput::new_builder()
             .lock(self.lock.clone().into())
             .build_exact_capacity(Capacity::bytes(data.len())?)?;
@@ -664,7 +672,7 @@ impl SystemCell {
 
 fn secp_lock_arg(privkey: &Privkey) -> Bytes {
     let pubkey_data = privkey.pubkey().expect("Get pubkey failed").serialize();
-    Bytes::from(&blake2b_256(&pubkey_data)[0..20])
+    Bytes::from((&blake2b_256(&pubkey_data)[0..20]).to_owned())
 }
 
 pub fn build_genesis_type_id_script(output_index: u64) -> packed::Script {
@@ -677,7 +685,7 @@ pub fn build_type_id_script(input: &packed::CellInput, output_index: u64) -> pac
     blake2b.update(&output_index.to_le_bytes());
     let mut ret = [0; 32];
     blake2b.finalize(&mut ret);
-    let script_arg = Bytes::from(&ret[..]);
+    let script_arg = Bytes::from(ret.to_vec());
     packed::Script::new_builder()
         .code_hash(TYPE_ID_CODE_HASH.pack())
         .hash_type(ScriptHashType::Type.into())
@@ -699,7 +707,7 @@ pub fn calculate_block_reward(epoch_reward: Capacity, epoch_length: BlockNumber)
 #[cfg(test)]
 pub mod test {
     use super::*;
-    use serde_derive::{Deserialize, Serialize};
+    use serde::{Deserialize, Serialize};
     use std::collections::HashMap;
 
     #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -743,7 +751,7 @@ pub mod test {
 
             Forget to generate docs/hashes.toml? Try to run;
 
-                ckb cli hashes -b > docs/hashes.toml
+                ckb list-hashes -b > docs/hashes.toml
         "#;
 
         let spec_hashes: HashMap<String, SpecHashes> =
@@ -860,6 +868,10 @@ pub mod test {
 
     #[test]
     fn test_default_params() {
+        let params: Params = toml::from_str("").unwrap();
+        let expected = Params::default();
+        assert_eq!(params, expected);
+
         let test_params: &str = r#"
             genesis_epoch_length = 100
         "#;
@@ -867,6 +879,16 @@ pub mod test {
         let params: Params = toml::from_str(&test_params).unwrap();
         let mut expected = Params::default();
         expected.genesis_epoch_length = 100;
+
+        assert_eq!(params, expected);
+
+        let test_params: &str = r#"
+            max_block_bytes = 100
+        "#;
+
+        let params: Params = toml::from_str(&test_params).unwrap();
+        let mut expected = Params::default();
+        expected.max_block_bytes = 100;
 
         assert_eq!(params, expected);
     }

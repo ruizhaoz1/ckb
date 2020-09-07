@@ -1,5 +1,6 @@
 use crate::chain::ChainService;
 use crate::{chain::ChainController, switch::Switch};
+use ckb_app_config::BlockAssemblerConfig;
 use ckb_chain_spec::consensus::Consensus;
 use ckb_dao_utils::genesis_dao_data;
 use ckb_jsonrpc_types::BlockTemplate;
@@ -8,7 +9,7 @@ use ckb_shared::shared::Shared;
 use ckb_shared::shared::SharedBuilder;
 use ckb_shared::Snapshot;
 use ckb_store::ChainStore;
-use ckb_tx_pool::{BlockAssemblerConfig, PlugTarget, TxEntry};
+use ckb_tx_pool::{PlugTarget, TxEntry};
 use ckb_types::{
     bytes::Bytes,
     core::{
@@ -175,7 +176,7 @@ fn test_prepare_uncles() {
     let block0_0 = gen_block(&genesis, 11, &epoch);
     let block0_1 = gen_block(&genesis, 10, &epoch);
 
-    let last_epoch = epoch.clone();
+    let last_epoch = epoch;
     let epoch = shared
         .snapshot()
         .next_epoch_ext(shared.consensus(), &last_epoch, &block0_1.header())
@@ -184,7 +185,7 @@ fn test_prepare_uncles() {
     let block1_1 = gen_block(&block0_1.header(), 10, &epoch);
 
     chain_controller
-        .internal_process_block(Arc::new(block0_1.clone()), Switch::DISABLE_ALL)
+        .internal_process_block(Arc::new(block0_1), Switch::DISABLE_ALL)
         .unwrap();
     chain_controller
         .internal_process_block(Arc::new(block0_0.clone()), Switch::DISABLE_ALL)
@@ -195,14 +196,20 @@ fn test_prepare_uncles() {
 
     let tx_pool = shared.tx_pool_controller();
 
-    // block number 3, epoch 0
-    let block_template = tx_pool
+    let mut block_template = tx_pool
         .get_block_template(None, None, None)
         .unwrap()
         .unwrap();
+    // block number 3, epoch 0
+    while (Into::<u64>::into(block_template.number)) != 3 {
+        block_template = tx_pool
+            .get_block_template(None, None, None)
+            .unwrap()
+            .unwrap()
+    }
     assert_eq!(block_template.uncles[0].hash, block0_0.hash().unpack());
 
-    let last_epoch = epoch.clone();
+    let last_epoch = epoch;
     let epoch = shared
         .snapshot()
         .next_epoch_ext(shared.consensus(), &last_epoch, &block1_1.header())
@@ -213,14 +220,20 @@ fn test_prepare_uncles() {
         .internal_process_block(Arc::new(block2_1.clone()), Switch::DISABLE_ALL)
         .unwrap();
 
-    let block_template = tx_pool
+    let mut block_template = tx_pool
         .get_block_template(None, None, None)
         .unwrap()
         .unwrap();
+    while (Into::<u64>::into(block_template.number)) != 4 {
+        block_template = tx_pool
+            .get_block_template(None, None, None)
+            .unwrap()
+            .unwrap()
+    }
     // block number 4, epoch 0, uncles should retained
     assert_eq!(block_template.uncles[0].hash, block0_0.hash().unpack());
 
-    let last_epoch = epoch.clone();
+    let last_epoch = epoch;
     let epoch = shared
         .snapshot()
         .next_epoch_ext(shared.consensus(), &last_epoch, &block2_1.header())
@@ -228,7 +241,7 @@ fn test_prepare_uncles() {
 
     let block3_1 = gen_block(&block2_1.header(), 10, &epoch);
     chain_controller
-        .internal_process_block(Arc::new(block3_1.clone()), Switch::DISABLE_ALL)
+        .internal_process_block(Arc::new(block3_1), Switch::DISABLE_ALL)
         .unwrap();
 
     let mut block_template = tx_pool
@@ -252,7 +265,7 @@ fn build_tx(parent_tx: &TransactionView, inputs: &[u32], outputs_len: usize) -> 
         .inputs(
             inputs
                 .iter()
-                .map(|index| CellInput::new(OutPoint::new(parent_tx.hash().to_owned(), *index), 0)),
+                .map(|index| CellInput::new(OutPoint::new(parent_tx.hash(), *index), 0)),
         )
         .outputs(
             (0..outputs_len)
@@ -293,7 +306,7 @@ fn test_package_basic() {
         .store()
         .get_block_header(&shared.store().get_block_hash(0).unwrap())
         .unwrap();
-    let mut parent_header = genesis.to_owned();
+    let mut parent_header = genesis;
     let mut blocks = vec![];
     for _i in 0..4 {
         let block = gen_block(&parent_header, 11, &epoch);
@@ -404,7 +417,7 @@ fn test_package_multi_best_scores() {
         .store()
         .get_block_header(&shared.store().get_block_hash(0).unwrap())
         .unwrap();
-    let mut parent_header = genesis.to_owned();
+    let mut parent_header = genesis;
     let mut blocks = vec![];
     for _i in 0..4 {
         let block = gen_block(&parent_header, 11, &epoch);
@@ -508,7 +521,7 @@ fn test_package_low_fee_decendants() {
         .store()
         .get_block_header(&shared.store().get_block_hash(0).unwrap())
         .unwrap();
-    let mut parent_header = genesis.to_owned();
+    let mut parent_header = genesis;
     let mut blocks = vec![];
     for _i in 0..4 {
         let block = gen_block(&parent_header, 11, &epoch);
@@ -557,7 +570,7 @@ fn test_package_txs_lower_than_min_fee_rate() {
         .get_block_header(&shared.store().get_block_hash(0).unwrap())
         .unwrap();
 
-    let mut parent_header = genesis.to_owned();
+    let mut parent_header = genesis;
     let mut blocks = vec![];
     for _i in 0..4 {
         let block = gen_block(&parent_header, 11, &epoch);
@@ -578,10 +591,10 @@ fn test_package_txs_lower_than_min_fee_rate() {
     let tx_pool = shared.tx_pool_controller();
     let entries = vec![
         TxEntry::new(tx1.clone(), 0, Capacity::shannons(1000), 100, vec![]),
-        TxEntry::new(tx2.clone(), 0, Capacity::shannons(80), 100, vec![]),
-        TxEntry::new(tx3.clone(), 0, Capacity::shannons(50), 100, vec![]),
-        TxEntry::new(tx4.clone(), 0, Capacity::shannons(20), 100, vec![]),
-        TxEntry::new(tx5.clone(), 0, Capacity::shannons(0), 100, vec![]),
+        TxEntry::new(tx2, 0, Capacity::shannons(80), 100, vec![]),
+        TxEntry::new(tx3, 0, Capacity::shannons(50), 100, vec![]),
+        TxEntry::new(tx4, 0, Capacity::shannons(20), 100, vec![]),
+        TxEntry::new(tx5, 0, Capacity::shannons(0), 100, vec![]),
     ];
     tx_pool.plug_entry(entries, PlugTarget::Proposed).unwrap();
 

@@ -1,12 +1,14 @@
-use std::net::IpAddr;
-use std::net::SocketAddr;
-use std::str::FromStr;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::{
+    borrow::Cow,
+    net::{IpAddr, SocketAddr},
+    str::FromStr,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use ckb_hash::blake2b_256;
 use lazy_static::lazy_static;
 use p2p::{
-    multiaddr::{multihash::Multihash, Multiaddr, Protocol},
+    multiaddr::{Multiaddr, Protocol},
     secio::PeerId,
     utils::{is_reachable, socketaddr_to_multiaddr},
 };
@@ -138,9 +140,7 @@ impl SeedRecord {
         let socket_addr = SocketAddr::new(self.ip, self.port);
         let mut multi_addr = socketaddr_to_multiaddr(socket_addr);
         if let Some(peer_id) = self.peer_id.clone() {
-            if let Ok(hash) = Multihash::from_bytes(peer_id.as_bytes().to_vec()) {
-                multi_addr.push(Protocol::P2p(hash));
-            }
+            multi_addr.push(Protocol::P2P(Cow::Owned(peer_id.into_bytes())));
         }
         multi_addr
     }
@@ -261,7 +261,7 @@ mod tests {
         assert!(record.pubkey != pub2);
 
         let ipv6: IpAddr = "2001:0dc5:72a3:0000:0000:802e:3370:73E4".parse().unwrap();
-        let record = SeedRecord::new(ipv6, port, peer_id.clone(), valid_until, pub1);
+        let record = SeedRecord::new(ipv6, port, peer_id, valid_until, pub1);
         assert!(record.check().is_ok());
     }
 }

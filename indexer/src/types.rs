@@ -1,34 +1,12 @@
-use ckb_db::DBConfig;
 use ckb_jsonrpc_types::{
     CellTransaction as JsonCellTransaction, LiveCell as JsonLiveCell,
-    TransactionPoint as JsonTransactionPoint,
+    LockHashCapacity as JsonLockHashCapacity, TransactionPoint as JsonTransactionPoint,
 };
 use ckb_types::{
-    core::BlockNumber,
+    core::{BlockNumber, Capacity},
     packed::{self, Byte32, CellOutput, OutPoint},
     prelude::*,
 };
-use serde_derive::{Deserialize, Serialize};
-
-/// Indexer configuration
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct IndexerConfig {
-    /// The minimum time (in milliseconds) between indexing exectuion, default is 500
-    pub batch_interval: u64,
-    /// The maximum number of blocks in a single indexing execution batch, default is 200
-    pub batch_size: usize,
-    pub db: DBConfig,
-}
-
-impl Default for IndexerConfig {
-    fn default() -> Self {
-        IndexerConfig {
-            batch_interval: 500,
-            batch_size: 200,
-            db: Default::default(),
-        }
-    }
-}
 
 pub struct LockHashIndex {
     pub lock_hash: Byte32,
@@ -39,6 +17,8 @@ pub struct LockHashIndex {
 pub struct LiveCell {
     pub created_by: TransactionPoint,
     pub cell_output: CellOutput,
+    pub output_data_len: u64,
+    pub cellbase: bool,
 }
 
 pub struct CellTransaction {
@@ -65,6 +45,13 @@ pub struct LockHashCellOutput {
 pub struct LockHashIndexState {
     pub block_number: BlockNumber,
     pub block_hash: Byte32,
+}
+
+#[derive(Debug, Clone)]
+pub struct LockHashCapacity {
+    pub capacity: Capacity,
+    pub cells_count: u64,
+    pub block_number: BlockNumber,
 }
 
 impl Pack<packed::LockHashIndex> for LockHashIndex {
@@ -194,10 +181,14 @@ impl From<LiveCell> for JsonLiveCell {
         let LiveCell {
             created_by,
             cell_output,
+            output_data_len,
+            cellbase,
         } = live_cell;
         JsonLiveCell {
             created_by: created_by.into(),
             cell_output: cell_output.into(),
+            output_data_len: output_data_len.into(),
+            cellbase,
         }
     }
 }
@@ -226,6 +217,21 @@ impl From<TransactionPoint> for JsonTransactionPoint {
             block_number: block_number.into(),
             tx_hash: tx_hash.unpack(),
             index: u64::from(index).into(),
+        }
+    }
+}
+
+impl From<LockHashCapacity> for JsonLockHashCapacity {
+    fn from(lock_hash_capacity: LockHashCapacity) -> JsonLockHashCapacity {
+        let LockHashCapacity {
+            capacity,
+            cells_count,
+            block_number,
+        } = lock_hash_capacity;
+        JsonLockHashCapacity {
+            capacity: capacity.into(),
+            cells_count: cells_count.into(),
+            block_number: block_number.into(),
         }
     }
 }

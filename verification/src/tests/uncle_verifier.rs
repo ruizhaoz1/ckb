@@ -17,7 +17,6 @@ use ckb_types::{
     packed::{Byte32, CellInput, ProposalShortId, Script, UncleBlockVec},
     prelude::*,
 };
-use faketime;
 use rand::random;
 use std::sync::Arc;
 
@@ -94,7 +93,7 @@ fn prepare() -> (Shared, Vec<BlockView>, Vec<BlockView>) {
         parent = new_block.header();
     }
 
-    parent = genesis.clone();
+    parent = genesis;
 
     // if block_number < 11 { chain1 == chain2 } else { chain1 != chain2 }
     for i in 1..number {
@@ -209,7 +208,7 @@ fn test_double_inclusion() {
 
     assert_error_eq!(
         verifier.verify().unwrap_err(),
-        UnclesError::DoubleInclusion(block.uncles().get(0).unwrap().header().hash().to_owned()),
+        UnclesError::DoubleInclusion(block.uncles().get(0).unwrap().header().hash()),
     );
 }
 
@@ -350,7 +349,7 @@ fn test_duplicated_uncles() {
     let dummy_context = dummy_context(&shared);
 
     let uncle = chain2[10].as_uncle();
-    let duplicated_uncles = vec![uncle.clone(), uncle.clone()];
+    let duplicated_uncles = vec![uncle.clone(), uncle];
 
     let block = chain1[12]
         .to_owned()
@@ -363,7 +362,7 @@ fn test_duplicated_uncles() {
     let verifier = UnclesVerifier::new(uncle_verifier_context, &block);
     assert_error_eq!(
         verifier.verify().unwrap_err(),
-        UnclesError::Duplicate(block.uncles().get(1).unwrap().header().hash().to_owned()),
+        UnclesError::Duplicate(block.uncles().get(1).unwrap().header().hash()),
     );
 }
 

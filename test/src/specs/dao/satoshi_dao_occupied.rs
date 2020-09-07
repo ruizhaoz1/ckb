@@ -43,7 +43,7 @@ impl Spec for DAOWithSatoshiCellOccupied {
         DAOVerifier::init(node).verify();
     }
 
-    fn modify_chain_spec(&self) -> Box<dyn Fn(&mut ChainSpec) -> ()> {
+    fn modify_chain_spec(&self) -> Box<dyn Fn(&mut ChainSpec)> {
         Box::new(|spec_config| {
             let satoshi_cell = issue_satoshi_cell();
             spec_config.genesis.issued_cells.push(satoshi_cell);
@@ -115,8 +115,9 @@ impl Spec for SpendSatoshiCell {
             .privkey
             .sign_recoverable(&tx_hash.unpack())
             .expect("sign");
-        let mut witness = Bytes::from(sig.serialize());
-        witness.extend_from_slice(&self.pubkey.serialize());
+        let mut witness_vec = sig.serialize();
+        witness_vec.extend_from_slice(&self.pubkey.serialize());
+        let witness = Bytes::from(witness_vec);
         let transaction = transaction
             .as_advanced_builder()
             .witness(witness.pack())
@@ -148,7 +149,7 @@ impl Spec for SpendSatoshiCell {
         );
     }
 
-    fn modify_chain_spec(&self) -> Box<dyn Fn(&mut ChainSpec) -> ()> {
+    fn modify_chain_spec(&self) -> Box<dyn Fn(&mut ChainSpec)> {
         let satoshi_cell_occupied_ratio = self.satoshi_cell_occupied_ratio;
         Box::new(move |spec_config| {
             spec_config.genesis.issued_cells.push(issue_satoshi_cell());

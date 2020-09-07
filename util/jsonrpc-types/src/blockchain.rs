@@ -4,7 +4,7 @@ use crate::{
     Timestamp, Uint128, Uint32, Uint64, Version,
 };
 use ckb_types::{core, packed, prelude::*, H256};
-use serde_derive::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
 use std::fmt;
 
@@ -51,9 +51,9 @@ impl fmt::Display for ScriptHashType {
 #[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq, Hash, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct Script {
-    pub args: JsonBytes,
     pub code_hash: H256,
     pub hash_type: ScriptHashType,
+    pub args: JsonBytes,
 }
 
 impl From<Script> for packed::Script {
@@ -155,8 +155,8 @@ impl From<OutPoint> for packed::OutPoint {
 #[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq, Hash, Debug)]
 #[serde(deny_unknown_fields)]
 pub struct CellInput {
-    pub previous_output: OutPoint,
     pub since: Uint64,
+    pub previous_output: OutPoint,
 }
 
 impl From<packed::CellInput> for CellInput {
@@ -252,8 +252,8 @@ pub struct Transaction {
     pub header_deps: Vec<H256>,
     pub inputs: Vec<CellInput>,
     pub outputs: Vec<CellOutput>,
-    pub witnesses: Vec<JsonBytes>,
     pub outputs_data: Vec<JsonBytes>,
+    pub witnesses: Vec<JsonBytes>,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq, Hash, Debug)]
@@ -396,10 +396,10 @@ impl TxStatus {
 pub struct Header {
     pub version: Version,
     pub compact_target: Uint32,
-    pub parent_hash: H256,
     pub timestamp: Timestamp,
     pub number: BlockNumber,
     pub epoch: EpochNumberWithFraction,
+    pub parent_hash: H256,
     pub transactions_root: H256,
     pub proposals_hash: H256,
     pub uncles_hash: H256,
@@ -694,6 +694,90 @@ impl From<BlockReward> for core::BlockReward {
             secondary: json.secondary.into(),
             tx_fee: json.tx_fee.into(),
             proposal_reward: json.proposal_reward.into(),
+        }
+    }
+}
+
+#[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq, Hash, Debug)]
+pub struct BlockIssuance {
+    pub primary: Capacity,
+    pub secondary: Capacity,
+}
+
+impl From<core::BlockIssuance> for BlockIssuance {
+    fn from(core: core::BlockIssuance) -> Self {
+        Self {
+            primary: core.primary.into(),
+            secondary: core.secondary.into(),
+        }
+    }
+}
+
+impl From<BlockIssuance> for core::BlockIssuance {
+    fn from(json: BlockIssuance) -> Self {
+        Self {
+            primary: json.primary.into(),
+            secondary: json.secondary.into(),
+        }
+    }
+}
+
+#[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq, Hash, Debug)]
+pub struct MinerReward {
+    pub primary: Capacity,
+    pub secondary: Capacity,
+    pub committed: Capacity,
+    pub proposal: Capacity,
+}
+
+impl From<core::MinerReward> for MinerReward {
+    fn from(core: core::MinerReward) -> Self {
+        Self {
+            primary: core.primary.into(),
+            secondary: core.secondary.into(),
+            committed: core.committed.into(),
+            proposal: core.proposal.into(),
+        }
+    }
+}
+
+impl From<MinerReward> for core::MinerReward {
+    fn from(json: MinerReward) -> Self {
+        Self {
+            primary: json.primary.into(),
+            secondary: json.secondary.into(),
+            committed: json.committed.into(),
+            proposal: json.proposal.into(),
+        }
+    }
+}
+
+#[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq, Hash, Debug)]
+pub struct BlockEconomicState {
+    pub issuance: BlockIssuance,
+    pub miner_reward: MinerReward,
+    pub txs_fee: Capacity,
+    pub finalized_at: H256,
+}
+
+impl From<core::BlockEconomicState> for BlockEconomicState {
+    fn from(core: core::BlockEconomicState) -> Self {
+        Self {
+            issuance: core.issuance.into(),
+            miner_reward: core.miner_reward.into(),
+            txs_fee: core.txs_fee.into(),
+            finalized_at: core.finalized_at.unpack(),
+        }
+    }
+}
+
+impl From<BlockEconomicState> for core::BlockEconomicState {
+    fn from(json: BlockEconomicState) -> Self {
+        Self {
+            issuance: json.issuance.into(),
+            miner_reward: json.miner_reward.into(),
+            txs_fee: json.txs_fee.into(),
+            finalized_at: json.finalized_at.pack(),
         }
     }
 }

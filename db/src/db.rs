@@ -1,84 +1,102 @@
 use crate::snapshot::RocksDBSnapshot;
 use crate::transaction::RocksDBTransaction;
-use crate::{internal_error, Col, DBConfig, Result};
+use crate::{internal_error, Col, Result};
+use ckb_app_config::DBConfig;
 use ckb_logger::{info, warn};
-use rocksdb::ops::{
-    Get, GetColumnFamilys, GetPinnedCF, GetPropertyCF, IterateCF, OpenCF, Put, SetOptions,
-};
+use rocksdb::ops::{GetColumnFamilys, GetPinned, GetPinnedCF, IterateCF, OpenCF, Put, SetOptions};
 use rocksdb::{
-    ffi, ColumnFamily, DBPinnableSlice, IteratorMode, OptimisticTransactionDB,
-    OptimisticTransactionOptions, Options, WriteOptions,
+    ffi, ColumnFamily, ColumnFamilyDescriptor, DBPinnableSlice, FullOptions, IteratorMode,
+    OptimisticTransactionDB, OptimisticTransactionOptions, Options, WriteOptions,
 };
 use std::sync::Arc;
 
-// If any data format in database was changed, we have to update this constant manually.
-//      - If the data can be migrated at startup automatically: update "x.y.z1" to "x.y.z2".
-//      - If the data can be migrated manually: update "x.y1.z" to "x.y2.0".
-//      - If the data can not be migrated: update "x1.y.z" to "x2.0.0".
-pub(crate) const VERSION_KEY: &str = "db-version";
-pub(crate) const VERSION_VALUE: &str = "0.2500.0";
+pub const VERSION_KEY: &str = "db-version";
 
+#[derive(Clone)]
 pub struct RocksDB {
     pub(crate) inner: Arc<OptimisticTransactionDB>,
 }
 
 impl RocksDB {
-    pub(crate) fn open_with_check(
-        config: &DBConfig,
-        columns: u32,
-        ver_key: &str,
-        ver_val: &str,
-    ) -> Result<Self> {
-        let mut opts = Options::default();
+    pub(crate) fn open_with_check(config: &DBConfig, columns: u32) -> Result<Self> {
+        let cf_names: Vec<_> = (0..columns).map(|c| c.to_string()).collect();
+
+        let (mut opts, cf_descriptors) = if let Some(ref file) = config.options_file {
+            let mut full_opts = FullOptions::load_from_file(file, None, false).map_err(|err| {
+                internal_error(format!("failed to load the options file: {}", err))
+            })?;
+            let cf_names_str: Vec<&str> = cf_names.iter().map(|s| s.as_str()).collect();
+            full_opts
+                .complete_column_families(&cf_names_str, false)
+                .map_err(|err| {
+                    internal_error(format!("failed to check all column families: {}", err))
+                })?;
+            let FullOptions {
+                db_opts,
+                cf_descriptors,
+            } = full_opts;
+            (db_opts, cf_descriptors)
+        } else {
+            let opts = Options::default();
+            let cf_descriptors: Vec<_> = cf_names
+                .iter()
+                .map(|ref c| ColumnFamilyDescriptor::new(*c, Options::default()))
+                .collect();
+            (opts, cf_descriptors)
+        };
+
         opts.create_if_missing(false);
         opts.create_missing_column_families(true);
 
-        let cfnames: Vec<_> = (0..columns).map(|c| c.to_string()).collect();
-        let cf_options: Vec<&str> = cfnames.iter().map(|n| n as &str).collect();
+        let db = OptimisticTransactionDB::open_cf_descriptors(
+            &opts,
+            &config.path,
+            cf_descriptors.clone(),
+        )
+        .or_else(|err| {
+            let err_str = err.as_ref();
+            if err_str.starts_with("Invalid argument:")
+                && err_str.ends_with("does not exist (create_if_missing is false)")
+            {
+                info!("Initialize a new database");
+                opts.create_if_missing(true);
+                let db = OptimisticTransactionDB::open_cf_descriptors(
+                    &opts,
+                    &config.path,
+                    cf_descriptors.clone(),
+                )
+                .map_err(|err| {
+                    internal_error(format!("failed to open a new created database: {}", err))
+                })?;
+                Ok(db)
+            } else if err.as_ref().starts_with("Corruption:") {
+                warn!("Repairing the rocksdb since {} ...", err);
+                let mut repair_opts = Options::default();
+                repair_opts.create_if_missing(false);
+                repair_opts.create_missing_column_families(false);
+                OptimisticTransactionDB::repair(repair_opts, &config.path).map_err(|err| {
+                    internal_error(format!("failed to repair the database: {}", err))
+                })?;
+                warn!("Opening the repaired rocksdb ...");
+                OptimisticTransactionDB::open_cf_descriptors(
+                    &opts,
+                    &config.path,
+                    cf_descriptors.clone(),
+                )
+                .map_err(|err| {
+                    internal_error(format!("failed to open the repaired database: {}", err))
+                })
+            } else {
+                Err(internal_error(format!(
+                    "failed to open the database: {}",
+                    err
+                )))
+            }
+        })?;
 
-        let db =
-            OptimisticTransactionDB::open_cf(&opts, &config.path, &cf_options).or_else(|err| {
-                let err_str = err.as_ref();
-                if err_str.starts_with("Invalid argument:")
-                    && err_str.ends_with("does not exist (create_if_missing is false)")
-                {
-                    info!("Initialize a new database");
-                    opts.create_if_missing(true);
-                    let db = OptimisticTransactionDB::open_cf(&opts, &config.path, &cf_options)
-                        .map_err(|err| {
-                            internal_error(format!(
-                                "failed to open a new created database: {}",
-                                err
-                            ))
-                        })?;
-                    db.put(ver_key, ver_val).map_err(|err| {
-                        internal_error(format!("failed to initiate the database: {}", err))
-                    })?;
-                    Ok(db)
-                } else if err.as_ref().starts_with("Corruption:") {
-                    warn!("Repairing the rocksdb since {} ...", err);
-                    let mut repair_opts = Options::default();
-                    repair_opts.create_if_missing(false);
-                    repair_opts.create_missing_column_families(false);
-                    OptimisticTransactionDB::repair(repair_opts, &config.path).map_err(|err| {
-                        internal_error(format!("failed to repair the database: {}", err))
-                    })?;
-                    warn!("Opening the repaired rocksdb ...");
-                    OptimisticTransactionDB::open_cf(&opts, &config.path, &cf_options).map_err(
-                        |err| {
-                            internal_error(format!("failed to open the repaired database: {}", err))
-                        },
-                    )
-                } else {
-                    Err(internal_error(format!(
-                        "failed to open the database: {}",
-                        err
-                    )))
-                }
-            })?;
-
-        if let Some(db_opt) = config.options.as_ref() {
-            let rocksdb_options: Vec<(&str, &str)> = db_opt
+        if !config.options.is_empty() {
+            let rocksdb_options: Vec<(&str, &str)> = config
+                .options
                 .iter()
                 .map(|(k, v)| (k.as_str(), v.as_str()))
                 .collect();
@@ -86,50 +104,13 @@ impl RocksDB {
                 .map_err(|_| internal_error("failed to set database option"))?;
         }
 
-        let version_bytes = db
-            .get(ver_key)
-            .map_err(|err| {
-                internal_error(format!("failed to check the version of database: {}", err))
-            })?
-            .ok_or_else(|| internal_error("version info about database is lost"))?;
-        let version_str = unsafe { ::std::str::from_utf8_unchecked(&version_bytes) };
-        let version = semver::Version::parse(version_str)
-            .map_err(|err| internal_error(format!("database version is malformed: {}", err)))?;
-        let required_version = semver::Version::parse(ver_val).map_err(|err| {
-            internal_error(format!("required database version is malformed: {}", err))
-        })?;
-        if required_version.major != version.major
-            || required_version.minor != version.minor
-            || required_version.patch < version.patch
-        {
-            return Err(internal_error(format!(
-                "the database version is not matched, require {} but it's {}",
-                required_version, version
-            )));
-        } else if required_version.patch > version.patch {
-            warn!(
-                "Migrating the data from {} to {} ...",
-                required_version, version
-            );
-            // Do data migration here.
-            db.put(ver_key, ver_val).map_err(|err| {
-                internal_error(format!("Failed to update database version: {}", err))
-            })?;
-        }
-
         Ok(RocksDB {
             inner: Arc::new(db),
         })
     }
 
-    // TODO Change `panic(...)` to `Result<...>`
     pub fn open(config: &DBConfig, columns: u32) -> Self {
-        Self::open_with_check(config, columns, VERSION_KEY, VERSION_VALUE)
-            .unwrap_or_else(|err| panic!("{}", err))
-    }
-
-    pub fn open_with_error(config: &DBConfig, columns: u32) -> Result<Self> {
-        Self::open_with_check(config, columns, VERSION_KEY, VERSION_VALUE)
+        Self::open_with_check(config, columns).unwrap_or_else(|err| panic!("{}", err))
     }
 
     pub fn open_tmp(columns: u32) -> Self {
@@ -138,13 +119,24 @@ impl RocksDB {
             path: tmp_dir.path().to_path_buf(),
             ..Default::default()
         };
-        Self::open_with_check(&config, columns, VERSION_KEY, VERSION_VALUE)
-            .unwrap_or_else(|err| panic!("{}", err))
+        Self::open_with_check(&config, columns).unwrap_or_else(|err| panic!("{}", err))
     }
 
     pub fn get_pinned(&self, col: Col, key: &[u8]) -> Result<Option<DBPinnableSlice>> {
         let cf = cf_handle(&self.inner, col)?;
         self.inner.get_pinned_cf(cf, &key).map_err(internal_error)
+    }
+
+    pub fn get_pinned_default(&self, key: &[u8]) -> Result<Option<DBPinnableSlice>> {
+        self.inner.get_pinned(&key).map_err(internal_error)
+    }
+
+    pub fn put<K, V>(&self, key: K, value: V) -> Result<()>
+    where
+        K: AsRef<[u8]>,
+        V: AsRef<[u8]>,
+    {
+        self.inner.put(key, value).map_err(internal_error)
     }
 
     pub fn traverse<F>(&self, col: Col, mut callback: F) -> Result<()>
@@ -181,18 +173,8 @@ impl RocksDB {
         }
     }
 
-    pub fn property_value(&self, col: Col, name: &str) -> Result<Option<String>> {
-        let cf = cf_handle(&self.inner, col)?;
-        self.inner
-            .property_value_cf(cf, name)
-            .map_err(internal_error)
-    }
-
-    pub fn property_int_value(&self, col: Col, name: &str) -> Result<Option<u64>> {
-        let cf = cf_handle(&self.inner, col)?;
-        self.inner
-            .property_int_value_cf(cf, name)
-            .map_err(internal_error)
+    pub fn inner(&self) -> Arc<OptimisticTransactionDB> {
+        Arc::clone(&self.inner)
     }
 }
 
@@ -203,29 +185,21 @@ pub(crate) fn cf_handle(db: &OptimisticTransactionDB, col: Col) -> Result<&Colum
 
 #[cfg(test)]
 mod tests {
-    use super::{DBConfig, Result, RocksDB, VERSION_KEY, VERSION_VALUE};
-    use crate::internal_error;
-    use ckb_error::assert_error_eq;
+    use super::{DBConfig, Result, RocksDB};
     use std::collections::HashMap;
-    use tempfile;
 
     fn setup_db(prefix: &str, columns: u32) -> RocksDB {
-        setup_db_with_check(prefix, columns, VERSION_KEY, VERSION_VALUE).unwrap()
+        setup_db_with_check(prefix, columns).unwrap()
     }
 
-    fn setup_db_with_check(
-        prefix: &str,
-        columns: u32,
-        ver_key: &str,
-        ver_val: &str,
-    ) -> Result<RocksDB> {
+    fn setup_db_with_check(prefix: &str, columns: u32) -> Result<RocksDB> {
         let tmp_dir = tempfile::Builder::new().prefix(prefix).tempdir().unwrap();
         let config = DBConfig {
             path: tmp_dir.as_ref().to_path_buf(),
             ..Default::default()
         };
 
-        RocksDB::open_with_check(&config, columns, ver_key, ver_val)
+        RocksDB::open_with_check(&config, columns)
     }
 
     #[test]
@@ -236,11 +210,26 @@ mod tests {
             .unwrap();
         let config = DBConfig {
             path: tmp_dir.as_ref().to_path_buf(),
-            options: Some({
+            options: {
                 let mut opts = HashMap::new();
                 opts.insert("disable_auto_compactions".to_owned(), "true".to_owned());
                 opts
-            }),
+            },
+            options_file: None,
+        };
+        RocksDB::open(&config, 2); // no panic
+    }
+
+    #[test]
+    fn test_set_rocksdb_options_empty() {
+        let tmp_dir = tempfile::Builder::new()
+            .prefix("test_set_rocksdb_options_empty")
+            .tempdir()
+            .unwrap();
+        let config = DBConfig {
+            path: tmp_dir.as_ref().to_path_buf(),
+            options: HashMap::new(),
+            options_file: None,
         };
         RocksDB::open(&config, 2); // no panic
     }
@@ -254,11 +243,12 @@ mod tests {
             .unwrap();
         let config = DBConfig {
             path: tmp_dir.as_ref().to_path_buf(),
-            options: Some({
+            options: {
                 let mut opts = HashMap::new();
                 opts.insert("letsrock".to_owned(), "true".to_owned());
                 opts
-            }),
+            },
+            options_file: None,
         };
         RocksDB::open(&config, 2); // panic
     }
@@ -297,6 +287,28 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_isolation() {
+        let db = setup_db("snapshot_isolation", 2);
+        let snapshot = db.get_snapshot();
+        let txn = db.transaction();
+        txn.put("0", &[0, 0], &[5, 4, 3, 2]).unwrap();
+        txn.put("1", &[1, 1], &[1, 2, 3, 4, 5]).unwrap();
+        txn.commit().unwrap();
+
+        assert!(snapshot.get_pinned("0", &[0, 0]).unwrap().is_none());
+        assert!(snapshot.get_pinned("1", &[1, 1]).unwrap().is_none());
+        let snapshot = db.get_snapshot();
+        assert_eq!(
+            snapshot.get_pinned("0", &[0, 0]).unwrap().unwrap().as_ref(),
+            &[5, 4, 3, 2]
+        );
+        assert_eq!(
+            snapshot.get_pinned("1", &[1, 1]).unwrap().unwrap().as_ref(),
+            &[1, 2, 3, 4, 5]
+        );
+    }
+
+    #[test]
     fn write_and_partial_read() {
         let db = setup_db("write_and_partial_read", 2);
 
@@ -313,37 +325,5 @@ mod tests {
         let ret = db.get_pinned("0", &[0, 0]).unwrap().unwrap();
 
         assert!(vec![4u8, 3, 2].as_slice() == &ret.as_ref()[1..4]);
-    }
-
-    #[test]
-    fn test_version_is_not_matched() {
-        let tmp_dir = tempfile::Builder::new()
-            .prefix("test_version_is_not_matched")
-            .tempdir()
-            .unwrap();
-        let config = DBConfig {
-            path: tmp_dir.as_ref().to_path_buf(),
-            ..Default::default()
-        };
-        let _ = RocksDB::open_with_check(&config, 1, VERSION_KEY, "0.1.0");
-        let r = RocksDB::open_with_check(&config, 1, VERSION_KEY, "0.2.0");
-        assert_error_eq!(
-            r.err().unwrap(),
-            internal_error("the database version is not matched, require 0.2.0 but it's 0.1.0"),
-        );
-    }
-
-    #[test]
-    fn test_version_is_matched() {
-        let tmp_dir = tempfile::Builder::new()
-            .prefix("test_version_is_matched")
-            .tempdir()
-            .unwrap();
-        let config = DBConfig {
-            path: tmp_dir.as_ref().to_path_buf(),
-            ..Default::default()
-        };
-        let _ = RocksDB::open_with_check(&config, 1, VERSION_KEY, VERSION_VALUE).unwrap();
-        let _ = RocksDB::open_with_check(&config, 1, VERSION_KEY, VERSION_VALUE).unwrap();
     }
 }

@@ -7,14 +7,13 @@ pub const CMD_MINER: &str = "miner";
 pub const CMD_EXPORT: &str = "export";
 pub const CMD_IMPORT: &str = "import";
 pub const CMD_INIT: &str = "init";
-pub const CMD_PROF: &str = "prof";
+pub const CMD_REPLAY: &str = "replay";
 pub const CMD_STATS: &str = "stats";
-pub const CMD_CLI: &str = "cli";
-pub const CMD_HASHES: &str = "hashes";
-pub const CMD_BLAKE256: &str = "blake256";
-pub const CMD_BLAKE160: &str = "blake160";
-pub const CMD_SECP256K1_LOCK: &str = "secp256k1-lock";
+pub const CMD_LIST_HASHES: &str = "list-hashes";
 pub const CMD_RESET_DATA: &str = "reset-data";
+pub const CMD_PEERID: &str = "peer-id";
+pub const CMD_GEN_SECRET: &str = "gen";
+pub const CMD_FROM_SECRET: &str = "from-secret";
 
 pub const ARG_CONFIG_DIR: &str = "config-dir";
 pub const ARG_FORMAT: &str = "format";
@@ -38,12 +37,18 @@ pub const ARG_BA_ADVANCED: &str = "ba-advanced";
 pub const ARG_FROM: &str = "from";
 pub const ARG_TO: &str = "to";
 pub const ARG_ALL: &str = "all";
+pub const ARG_LIMIT: &str = "limit";
 pub const ARG_DATABASE: &str = "database";
 pub const ARG_INDEXER: &str = "indexer";
 pub const ARG_NETWORK: &str = "network";
 pub const ARG_NETWORK_PEER_STORE: &str = "network-peer-store";
 pub const ARG_NETWORK_SECRET_KEY: &str = "network-secret-key";
 pub const ARG_LOGS: &str = "logs";
+pub const ARG_TMP_TARGET: &str = "tmp-target";
+pub const ARG_SECRET_PATH: &str = "secret-path";
+pub const ARG_PROFILE: &str = "profile";
+pub const ARG_SANITY_CHECK: &str = "sanity-check";
+pub const ARG_FULL_VERFICATION: &str = "full-verfication";
 
 const GROUP_BA: &str = "ba";
 
@@ -66,11 +71,12 @@ fn basic_app<'b>() -> App<'static, 'b> {
         .subcommand(miner())
         .subcommand(export())
         .subcommand(import())
-        .subcommand(cli())
+        .subcommand(list_hashes())
         .subcommand(init())
-        .subcommand(prof())
+        .subcommand(replay())
         .subcommand(stats())
         .subcommand(reset_data())
+        .subcommand(peer_id())
 }
 
 pub fn get_matches(version: &Version) -> ArgMatches<'static> {
@@ -89,7 +95,18 @@ fn run() -> App<'static, 'static> {
 }
 
 fn miner() -> App<'static, 'static> {
-    SubCommand::with_name(CMD_MINER).about("Runs ckb miner")
+    SubCommand::with_name(CMD_MINER)
+        .about("Runs ckb miner")
+        .arg(
+            Arg::with_name(ARG_LIMIT)
+                .short("l")
+                .long(ARG_LIMIT)
+                .takes_value(true)
+                .help(
+                    "Exit after how many nonces found; \
+            0 means the miner will never exit. [default: 0]",
+                ),
+        )
 }
 
 fn reset_data() -> App<'static, 'static> {
@@ -145,7 +162,7 @@ fn reset_data() -> App<'static, 'static> {
 pub(crate) fn stats() -> App<'static, 'static> {
     SubCommand::with_name(CMD_STATS)
         .about(
-            "Statics chain infomation\n\
+            "Statics chain information\n\
              Example:\n\
              ckb -C <dir> stats --from 1 --to 500",
         )
@@ -163,24 +180,37 @@ pub(crate) fn stats() -> App<'static, 'static> {
         )
 }
 
-fn prof() -> App<'static, 'static> {
-    SubCommand::with_name(CMD_PROF)
-        .about(
-            "Profiles ckb node\n\
-             Example: Process 1..500 blocks then output flagme graph\n\
-             cargo flamegraph --bin ckb -- -C <dir> prof 1 500",
-        )
+fn replay() -> App<'static, 'static> {
+    SubCommand::with_name(CMD_REPLAY)
+        .about("replay ckb process block")
+        .help("
+            --tmp-target <tmp> --profile 1 10,\n
+            --tmp-target <tmp> --sanity-check,\n
+        ")
+        .arg(Arg::with_name(ARG_TMP_TARGET).long(ARG_TMP_TARGET).takes_value(true).required(true).help(
+            "Specifies a target path, prof command make a temporary directory inside of target and the directory will be automatically deleted when finished",
+        ))
+        .arg(Arg::with_name(ARG_PROFILE).long(ARG_PROFILE).help(
+            "Enable profile",
+        ))
         .arg(
             Arg::with_name(ARG_FROM)
-                .required(true)
-                .index(1)
-                .help("Specifies from block number."),
+              .help("Specifies profile from block number."),
         )
         .arg(
             Arg::with_name(ARG_TO)
+              .help("Specifies profile to block number."),
+        )
+        .arg(
+            Arg::with_name(ARG_SANITY_CHECK).long(ARG_SANITY_CHECK).help("Enable sanity check")
+        )
+        .arg(
+            Arg::with_name(ARG_FULL_VERFICATION).long(ARG_FULL_VERFICATION).help("Enable sanity check")
+        )
+        .group(
+            ArgGroup::with_name("mode")
+                .args(&[ARG_PROFILE, ARG_SANITY_CHECK])
                 .required(true)
-                .index(2)
-                .help("Specifies to block number."),
         )
 }
 
@@ -212,18 +242,8 @@ fn import() -> App<'static, 'static> {
         )
 }
 
-fn cli() -> App<'static, 'static> {
-    SubCommand::with_name(CMD_CLI)
-        .about("CLI tools")
-        .setting(AppSettings::SubcommandRequiredElseHelp)
-        .subcommand(cli_hashes())
-        .subcommand(cli_blake256())
-        .subcommand(cli_blake160())
-        .subcommand(cli_secp256k1_lock())
-}
-
-fn cli_hashes() -> App<'static, 'static> {
-    SubCommand::with_name(CMD_HASHES)
+fn list_hashes() -> App<'static, 'static> {
+    SubCommand::with_name(CMD_LIST_HASHES)
         .about("Lists well known hashes")
         .arg(
             Arg::with_name(ARG_BUNDLED)
@@ -232,51 +252,6 @@ fn cli_hashes() -> App<'static, 'static> {
                 .help(
                     "Lists hashes of the bundled chain specs instead of the current effective one.",
                 ),
-        )
-}
-
-fn arg_hex_data() -> Arg<'static, 'static> {
-    Arg::with_name(ARG_DATA)
-        .short("d")
-        .long(ARG_DATA)
-        .value_name("hex")
-        .required(true)
-        .index(1)
-        .help("The data encoded in hex.")
-}
-
-fn cli_blake256() -> App<'static, 'static> {
-    SubCommand::with_name(CMD_BLAKE256)
-        .about("Hashes data using blake2b with CKB personal option, prints first 256 bits.")
-        .arg(arg_hex_data())
-}
-
-fn cli_blake160() -> App<'static, 'static> {
-    SubCommand::with_name(CMD_BLAKE160)
-        .about("Hashes data using blake2b with CKB personal option, prints first 160 bits.")
-        .arg(arg_hex_data())
-}
-
-fn cli_secp256k1_lock() -> App<'static, 'static> {
-    SubCommand::with_name(CMD_SECP256K1_LOCK)
-        .about("Prints lock args from secp256k1 pubkey")
-        .arg(
-            Arg::with_name(ARG_DATA)
-                .short("d")
-                .long(ARG_DATA)
-                .required(true)
-                .index(1)
-                .help("Pubkey encoded in hex, either uncompressed 65 bytes or compresed 33 bytes"),
-        )
-        .arg(
-            Arg::with_name(ARG_FORMAT)
-                .long(ARG_FORMAT)
-                .short("s")
-                .possible_values(&["toml", "cmd"])
-                .default_value("toml")
-                .required(true)
-                .takes_value(true)
-                .help("Output format. toml: ckb.toml, cmd: command line options for `ckb init`"),
         )
 }
 
@@ -390,6 +365,33 @@ fn init() -> App<'static, 'static> {
                 .long("spec")
                 .takes_value(true)
                 .hidden(true),
+        )
+}
+
+fn peer_id() -> App<'static, 'static> {
+    SubCommand::with_name(CMD_PEERID)
+        .about("About peer id, base on Secp256k1")
+        .subcommand(
+            SubCommand::with_name(CMD_FROM_SECRET)
+                .about("Generate peer id from secret file")
+                .arg(
+                    Arg::with_name(ARG_SECRET_PATH)
+                        .takes_value(true)
+                        .long(ARG_SECRET_PATH)
+                        .required(true)
+                        .help("Generate peer id from secret file path"),
+                ),
+        )
+        .subcommand(
+            SubCommand::with_name(CMD_GEN_SECRET)
+                .about("Generate random key to file")
+                .arg(
+                    Arg::with_name(ARG_SECRET_PATH)
+                        .long(ARG_SECRET_PATH)
+                        .required(true)
+                        .takes_value(true)
+                        .help("Generate peer id to file path"),
+                ),
         )
 }
 

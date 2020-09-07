@@ -1,6 +1,6 @@
 use super::Verifier;
 use crate::{
-    BlockErrorKind, NumberError, PowError, TimestampError, UnknownParentError,
+    BlockVersionError, NumberError, PowError, TimestampError, UnknownParentError,
     ALLOWED_FUTURE_BLOCKTIME,
 };
 use ckb_chain_spec::consensus::Consensus;
@@ -41,7 +41,7 @@ impl<'a, T: HeaderResolver, M: BlockMedianTimeContext> Verifier for HeaderVerifi
         // POW check first
         PowVerifier::new(header, self.consensus.pow_engine().as_ref()).verify()?;
         let parent = target.parent().ok_or_else(|| UnknownParentError {
-            parent_hash: header.parent_hash().to_owned(),
+            parent_hash: header.parent_hash(),
         })?;
         NumberVerifier::new(parent, header).verify()?;
         TimestampVerifier::new(self.block_median_time_context, header).verify()?;
@@ -64,7 +64,11 @@ impl<'a> VersionVerifier<'a> {
 
     pub fn verify(&self) -> Result<(), Error> {
         if self.header.version() != self.block_version {
-            return Err(BlockErrorKind::Version.into());
+            return Err(BlockVersionError {
+                expected: self.block_version,
+                actual: self.header.version(),
+            }
+            .into());
         }
         Ok(())
     }
